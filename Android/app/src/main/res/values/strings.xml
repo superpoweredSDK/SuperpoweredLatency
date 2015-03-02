@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="icon_title">Latency Test</string>
+    <string name="app_name">Superpowered Latency Test</string>
+    <string name="app_info">Before starting the total round-trip audio latency test, please do the following:\n\n1. Make sure you are in a quiet place.\n2. Check you have an active Internet connection.\n3. Set volume to near maximum.</string>
+    <string name="action_settings">Settings</string>
+    <string name="thankyou">Thank you. We\'ve uploaded the result to the latency benchmarking at:</string>
+
+</resources>
