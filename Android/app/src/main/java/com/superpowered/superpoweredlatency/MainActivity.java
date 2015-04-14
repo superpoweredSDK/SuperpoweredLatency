@@ -3,6 +3,7 @@ package com.superpowered.superpoweredlatency;
 import android.content.pm.PackageManager;
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
+import android.util.AndroidRuntimeException;
 import android.util.Base64;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -24,9 +25,12 @@ import java.io.IOException;
 
 import android.content.Intent;
 
+import com.samsung.android.sdk.SsdkUnsupportedException;
+import com.samsung.android.sdk.professionalaudio.Sapa;
 import com.samsung.android.sdk.professionalaudio.SapaProcessor;
 import com.samsung.android.sdk.professionalaudio.SapaService;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 public class MainActivity extends ActionBarActivity {
     TextView button = null;
@@ -70,14 +74,7 @@ public class MainActivity extends ActionBarActivity {
         website = (TextView)findViewById(R.id.website);
 
         // Set up audio and native libs.
-/*
-    Samsung Professional Audio SDK is not supported, because it does not implement audio input yet on every Galaxy device.
-    Unfortunately, Samsung has not responded to our inquiries about audio input availability yet.
-    Our experience in building several applications using the Samsung Professional Audio SDK for audio output,
-    the latency improvement and output latency appear to be similar in performance to the latest Google Nexus devices.
-    Despite our code is complete, input may be silence. Therefore, this part is commented out for now.
-
-        if (Build.VERSION.SDK_INT >= 16) try {
+        if (Build.VERSION.SDK_INT >= 21) try {
             Sapa sapa = new Sapa();
             sapa.initialize(this);
             sapaService = new SapaService();
@@ -91,17 +88,11 @@ public class MainActivity extends ActionBarActivity {
                 }
             });
             sapaService.register(sapaClient);
-        } catch (SsdkUnsupportedException e) {
-            sapaService = null;
-            sapaClient = null;
-        } catch (InstantiationException e) {
-            sapaService = null;
-            sapaClient = null;
-        } catch (AndroidRuntimeException e) {
+        } catch (SsdkUnsupportedException | InstantiationException | AndroidRuntimeException e) {
             sapaService = null;
             sapaClient = null;
         }
-*/
+
         // If there is no Samsung Professional Audio SDK.
         if (sapaClient == null) {
             System.loadLibrary("SuperpoweredLatency");
@@ -185,10 +176,12 @@ public class MainActivity extends ActionBarActivity {
                     } else {
                         ByteBuffer buffer = sapaClient.queryData("r", 0);
                         if (buffer == null) return;
-                        samplerate = buffer.get(0);
+                        buffer.order(ByteOrder.LITTLE_ENDIAN);
+                        samplerate = buffer.getInt();
                         buffer = sapaClient.queryData("b", 0);
                         if (buffer == null) return;
-                        buffersize = buffer.get(0);
+                        buffer.order(ByteOrder.LITTLE_ENDIAN);
+                        buffersize = buffer.getInt();
                     }
 
                     ((TextView)findViewById(R.id.latency)).setText(_latencyMs + " ms");
@@ -198,7 +191,8 @@ public class MainActivity extends ActionBarActivity {
 
                     // Uploading the result to our server.
                     network.setText("Uploading data...");
-                    String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize)
+                    long sapa = (sapaService == null) ? 0 : 1;
+                    String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + sapa)
                             .buildUpon()
                             .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
                             .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))

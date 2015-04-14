@@ -128,7 +128,8 @@ static void streamFormatChangedCallback(void *inRefCon, AudioUnit inUnit, AudioU
 
     // Set up the audio session. Prefer 48 kHz and 64 samples.
     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord error:NULL];
-    [[AVAudioSession sharedInstance] setMode:AVAudioSessionModeDefault error:NULL];
+    // Default mode adds 30 ms of additional latency for the built-in microphone on iOS devices from the first iPad Air.
+    [[AVAudioSession sharedInstance] setMode:AVAudioSessionModeMeasurement error:NULL];
     [[AVAudioSession sharedInstance] setPreferredSampleRate:48000 error:NULL];
     [[AVAudioSession sharedInstance] setPreferredIOBufferDuration:64.0 / 48000.0 error:NULL];
     [[AVAudioSession sharedInstance] setActive:YES error:NULL];

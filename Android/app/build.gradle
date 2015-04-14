@@ -8,8 +8,8 @@ android {
         applicationId "com.superpowered.superpoweredlatency"
         minSdkVersion 11
         targetSdkVersion 21
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
 
         ndk {
             moduleName "SuperpoweredLatency"
