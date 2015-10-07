@@ -19,10 +19,6 @@ namespace android {
             *intBuffer++ = (short int)(*right++ * 32767.0f);
         };
 
-        int sum = 0;
-        for (int n = 0; n < frames * 2; n++) sum += self->stereo[n];
-        if (sum > 0) __android_log_print(ANDROID_LOG_DEBUG, "SAPA" , "%i %i", frames, sum);
-
         measurer->processInput(self->stereo, jack_get_sample_rate(self->jackClient), frames);
         measurer->processOutput(self->stereo);
 

@@ -1,32 +1,46 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 21
-    buildToolsVersion "21.1.2"
+    compileSdkVersion 22
+    buildToolsVersion "22.0.1"
 
     defaultConfig {
         applicationId "com.superpowered.superpoweredlatency"
         minSdkVersion 11
         targetSdkVersion 21
-        versionCode 2
-        versionName "1.1"
+        versionCode 3
+        versionName "1.4"
 
-        ndk {
-            moduleName "SuperpoweredLatency"
-            ldLibs "OpenSLES", "log"
+        sourceSets.main {
+            jniLibs.srcDir 'src/main/libs'
+            jni.srcDirs = []
         }
     }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    task ndkBuild(type: Exec) {
+        commandLine '/android/ndk/ndk-build', '-B', '-C', file('src/main/jni').absolutePath
+// Windows users:
+// commandLine 'C:\\Android\\ndk\\ndk-build.cmd', '-B', '-C', file('src/main/jni').absolutePath
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
+    tasks.withType(JavaCompile) {
+        compileTask -> compileTask.dependsOn ndkBuild
+    }
 }
 
 dependencies {
     compile fileTree(dir: 'libs', include: ['*.jar'])
-    compile 'com.android.support:appcompat-v7:21.0.3'
-    compile files('src/main/jar/professionalaudio-v2.0.1.jar')
+    compile 'com.android.support:appcompat-v7:22.2.0'
+    compile files('src/main/jar/professionalaudio-v2.1.0.jar')
     compile files('src/main/jar/sdk-v1.0.0.jar')
 }

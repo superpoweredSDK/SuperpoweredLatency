@@ -12,22 +12,27 @@ ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
     include $(PREBUILT_SHARED_LIBRARY)
 endif
 
-# build the JNI for Samsung Professional Audio SDK (ARM only)
+# build the JNI for Samsung Professional Audio SDK (ARMv7 only)
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
     include $(CLEAR_VARS)
         LOCAL_MODULE := wave
-
-        LOCAL_C_INCLUDES := \
-            $(LOCAL_PATH)/apa/include \
-            $(LOCAL_PATH)/../../app/src/main/jni
-
-        LOCAL_SRC_FILES := sapa.cpp sapaClient.cpp \
-            $(LOCAL_PATH)/../../app/src/main/jni/latencyMeasurer.cpp
+        LOCAL_C_INCLUDES := $(LOCAL_PATH)/apa/include
+        LOCAL_SRC_FILES := sapa.cpp sapaClient.cpp latencyMeasurer.cpp
 
         LOCAL_SHARED_LIBRARIES := libjack
         LOCAL_STATIC_LIBRARIES := libsapaclient
         LOCAL_CFLAGS = -mfloat-abi=softfp -mfpu=neon -O3
-
         LOCAL_LDLIBS := -llog -landroid -lOpenSLES
     include $(BUILD_SHARED_LIBRARY)
 endif
+
+# build the JNI for OpenSL ES
+include $(CLEAR_VARS)  
+LOCAL_MODULE := SuperpoweredLatency 
+LOCAL_SRC_FILES := SuperpoweredLatency.cpp latencyMeasurer.cpp
+
+LOCAL_LDLIBS := -llog -landroid -lOpenSLES 
+LOCAL_CFLAGS = -O3
+include $(BUILD_SHARED_LIBRARY)
+
+

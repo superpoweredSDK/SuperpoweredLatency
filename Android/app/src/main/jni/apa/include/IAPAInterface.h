@@ -129,7 +129,7 @@ class IAPAInterface {
 };
 
 #define APA_NDK_API_LEVEL (1)
-#define APA_NDK_VERSION_NUMBER (1103)
+#define APA_NDK_VERSION_NUMBER (1102)
 #define DECLARE_APA_INTERFACE(NAME)							\
 	extern "C" NAME* apa_create();							\
 	extern "C" void apa_destroy(NAME* p);					\
