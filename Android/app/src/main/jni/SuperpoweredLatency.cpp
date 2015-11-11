@@ -118,15 +118,14 @@ JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_Superpower
 	SLDataSink inputSink = { &inputLocator, &inputFormat };
 	const SLInterfaceID inputInterfaces[1] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE };
 	(*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &inputBufferQueue, &inputSource, &inputSink, 1, inputInterfaces, requireds);
-	(*inputBufferQueue)->Realize(inputBufferQueue, SL_BOOLEAN_FALSE);
 
     // Configure the voice recognition preset which has no signal processing for lower latency.
     SLAndroidConfigurationItf inputConfiguration;
     if ((*inputBufferQueue)->GetInterface(inputBufferQueue, SL_IID_ANDROIDCONFIGURATION, &inputConfiguration) == SL_RESULT_SUCCESS) {
         SLuint32 presetValue = SL_ANDROID_RECORDING_PRESET_VOICE_RECOGNITION;
         (*inputConfiguration)->SetConfiguration(inputConfiguration, SL_ANDROID_KEY_RECORDING_PRESET, &presetValue, sizeof(SLuint32));
-        (*inputBufferQueue)->Realize(inputBufferQueue, SL_BOOLEAN_FALSE);
     };
+    (*inputBufferQueue)->Realize(inputBufferQueue, SL_BOOLEAN_FALSE);
 
 	// Create the output buffer queue.
 	SLDataLocator_AndroidSimpleBufferQueue outputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };

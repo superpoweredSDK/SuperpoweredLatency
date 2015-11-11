@@ -29,7 +29,8 @@ static int sumAudio(short int *audio, int numberOfSamples) {
     int sum = 0;
     while (numberOfSamples) {
         numberOfSamples--;
-        sum += abs(*audio++) + abs(*audio++);
+        sum += abs(audio[0]) + abs(audio[1]);
+        audio += 2;
     };
     return sum;
 }
