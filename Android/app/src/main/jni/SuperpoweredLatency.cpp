@@ -78,7 +78,7 @@ JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersi
 
 // Set up audio and measurer.
 JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(JNIEnv *javaEnvironment, jobject self, jlong _samplerate, jlong _buffersize) {
-    static const SLboolean requireds[2] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE };
+    static const SLboolean requireds[2] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
 
     measurer = new latencyMeasurer();
     pthread_mutex_init(&mutex, NULL);
@@ -116,8 +116,8 @@ JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_Superpower
 	SLDataLocator_AndroidSimpleBufferQueue inputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
 	SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, 2, samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
 	SLDataSink inputSink = { &inputLocator, &inputFormat };
-	const SLInterfaceID inputInterfaces[1] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE };
-	(*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &inputBufferQueue, &inputSource, &inputSink, 1, inputInterfaces, requireds);
+	const SLInterfaceID inputInterfaces[2] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
+	(*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &inputBufferQueue, &inputSource, &inputSink, 2, inputInterfaces, requireds);
 
     // Configure the voice recognition preset which has no signal processing for lower latency.
     SLAndroidConfigurationItf inputConfiguration;

@@ -22,6 +22,26 @@
         android:paddingTop="15dp"
         android:paddingBottom="15dp"
         android:textColor="#4D4D4D"
+        android:onClick="onSettings"
+        android:autoText="true" />
+    <TextView
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:textAppearance="?android:attr/textAppearanceLarge"
+        android:text="⋮"
+        android:id="@+id/headerSettings"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentLeft="true"
+        android:layout_alignParentStart="true"
+        android:background="#00000000"
+        android:textAlignment="gravity"
+        android:gravity="right"
+        android:textSize="20dp"
+        android:paddingTop="15dp"
+        android:paddingBottom="15dp"
+        android:paddingRight="15dp"
+        android:textColor="#999999"
+        android:onClick="onSettings"
         android:autoText="true" />
 
     <View

@@ -1,6 +1,7 @@
 package com.superpowered.superpoweredlatency;
 
 import android.content.pm.PackageManager;
+import android.preference.PreferenceManager;
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.util.AndroidRuntimeException;
@@ -45,6 +46,7 @@ public class MainActivity extends ActionBarActivity {
     private Handler handler;
     private SapaService sapaService = null;
     private SapaProcessor sapaClient = null;
+    private boolean bufferSizeOverride = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,7 +76,7 @@ public class MainActivity extends ActionBarActivity {
         website = (TextView)findViewById(R.id.website);
 
         // Set up audio and native libs.
-        if (Build.VERSION.SDK_INT >= 21) try {
+        if (PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("sapa", true) && (Build.VERSION.SDK_INT >= 21)) try {
             Sapa sapa = new Sapa();
             sapa.initialize(this);
             sapaService = new SapaService();
@@ -106,6 +108,14 @@ public class MainActivity extends ActionBarActivity {
             if (samplerateString == null) samplerateString = "44100";
             if (buffersizeString == null) buffersizeString = "512";
             else if (Build.VERSION.SDK_INT >= 19) buffersizeString = "-" + buffersizeString; // Indicate Android 4.4 or higher with negating the buffer size.
+
+            // Override the buffer size if needed.
+            String manualBuffersize = PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getString("manual_buffersize", "0");
+            int manualBuffersizeInt = Integer.parseInt(manualBuffersize);
+            if ((manualBuffersizeInt >= 32) && (manualBuffersizeInt <= 2048)) {
+                buffersizeString = manualBuffersize;
+                bufferSizeOverride = true;
+            };
 
             // Call the native lib to set up.
             SuperpoweredLatency(Integer.parseInt(samplerateString), Integer.parseInt(buffersizeString));
@@ -189,16 +199,21 @@ public class MainActivity extends ActionBarActivity {
                     ((TextView)findViewById(R.id.samplerate)).setText(samplerate + " Hz");
                     button.setText("Share Results");
 
-                    // Uploading the result to our server.
-                    network.setText("Uploading data...");
-                    long sapa = (sapaService == null) ? 0 : 1;
-                    String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + sapa)
-                            .buildUpon()
-                            .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
-                            .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))
-                            .appendQueryParameter("build", encodeString(Build.VERSION.INCREMENTAL))
-                            .build().toString();
-                    new HTTPGetTask().execute(url);
+                    if (!bufferSizeOverride && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)) {
+                        // Uploading the result to our server. Results with native buffer sizes are reported only.
+                        network.setText("Uploading data...");
+                        long sapa = (sapaService == null) ? 0 : 1;
+                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + sapa)
+                                .buildUpon()
+                                .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
+                                .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))
+                                .appendQueryParameter("build", encodeString(Build.VERSION.INCREMENTAL))
+                                .build().toString();
+                        new HTTPGetTask().execute(url);
+                    } else {
+                        network.setText("");
+                        website.setVisibility(View.VISIBLE);
+                    }
                 }
 
             // Measurement starts.
@@ -246,12 +261,12 @@ public class MainActivity extends ActionBarActivity {
         }
     }
 
-    public void onLatency(View _latency) {
+    public void onLatency(View _view) {
         Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://superpowered.com/latency"));
         startActivity(browserIntent);
     }
 
-    public void onSuperpowered(View _latency) {
+    public void onSuperpowered(View _view) {
         Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://superpowered.com/"));
         startActivity(browserIntent);
     }
@@ -265,6 +280,11 @@ public class MainActivity extends ActionBarActivity {
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         return super.onOptionsItemSelected(item);
+    }
+
+    public void onSettings(View _view) {
+        Intent settingsIntent = new Intent(this, SettingsActivity.class);
+        startActivity(settingsIntent);
     }
 
     private native void SuperpoweredLatency(long samplerate, long buffersize);

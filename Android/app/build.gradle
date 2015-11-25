@@ -9,7 +9,7 @@ android {
         minSdkVersion 11
         targetSdkVersion 21
         versionCode 3
-        versionName "1.4.2"
+        versionName "1.4.3"
 
         sourceSets.main {
             jniLibs.srcDir 'src/main/libs'
