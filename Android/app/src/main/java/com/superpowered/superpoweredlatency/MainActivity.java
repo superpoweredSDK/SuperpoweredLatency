@@ -1,7 +1,11 @@
 package com.superpowered.superpoweredlatency;
 
+import android.Manifest;
+import android.content.BroadcastReceiver;
 import android.content.pm.PackageManager;
 import android.preference.PreferenceManager;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.util.AndroidRuntimeException;
@@ -15,16 +19,18 @@ import android.view.View;
 import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.os.Handler;
 import android.net.Uri;
 import android.os.AsyncTask;
-import org.apache.http.HttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.util.EntityUtils;
-import java.io.IOException;
 
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.IOException;
 import android.content.Intent;
+import android.content.IntentFilter;
 
 import com.samsung.android.sdk.SsdkUnsupportedException;
 import com.samsung.android.sdk.professionalaudio.Sapa;
@@ -47,10 +53,43 @@ public class MainActivity extends ActionBarActivity {
     private SapaService sapaService = null;
     private SapaProcessor sapaClient = null;
     private boolean bufferSizeOverride = false;
+    private boolean headphoneSocket = false;
+    private boolean proAudioFlag = false;
+    private boolean sapaPermissions = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        if (Build.VERSION.SDK_INT >= 23) { // Need to ask for permissions.
+            String[] permissions = {
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.MODIFY_AUDIO_SETTINGS,
+                    Manifest.permission.INTERNET,
+                    "com.samsung.android.sdk.professionalaudio.permission.START_MONITOR_SERVICE",
+                    "com.samsung.android.providers.context.permission.WRITE_USE_APP_FEATURE_SURVEY"
+            };
+            for (String s:permissions) if (ContextCompat.checkSelfPermission(this, s) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, permissions, 0);
+                break;
+            }
+        } else initialize();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
+        if ((requestCode != 0) || (grantResults.length < 1) || (grantResults.length != permissions.length)) return;
+        boolean canInitialize = true;
+        for (int n = 0; n < grantResults.length; n++) if (grantResults[n] != PackageManager.PERMISSION_GRANTED) {
+            if (n < 3) { // Record audio, modify audio settings and internet are showstoppers.
+                canInitialize = false;
+                Toast.makeText(getApplicationContext(), "Please allow all permissions for the Latency Test app.", Toast.LENGTH_LONG).show();
+            } else sapaPermissions = false; // There is no Samsung Professional Audio SDK available in this case.
+        }
+        if (canInitialize) initialize();
+    }
+
+    private void initialize() {
         setContentView(R.layout.activity_main);
 
         // Set up UI and display system information.
@@ -64,7 +103,7 @@ public class MainActivity extends ActionBarActivity {
         TextView model = (TextView)findViewById(R.id.model);
         model.setText(Build.MANUFACTURER + " " + Build.MODEL);
         TextView os = (TextView)findViewById(R.id.os);
-        os.setText("Android " + Build.VERSION.RELEASE);
+        os.setText("Android " + Build.VERSION.RELEASE + " " + Build.ID);
 
         button = (TextView)findViewById(R.id.button);
         infoView = (TextView)findViewById(R.id.infoview);
@@ -75,27 +114,46 @@ public class MainActivity extends ActionBarActivity {
         progress = (ProgressBar)findViewById(R.id.progress);
         website = (TextView)findViewById(R.id.website);
 
-        // Set up audio and native libs.
-        if (PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("sapa", true) && (Build.VERSION.SDK_INT >= 21)) try {
-            Sapa sapa = new Sapa();
-            sapa.initialize(this);
-            sapaService = new SapaService();
-            sapaService.stop(true);
-            sapaService.start(SapaService.START_PARAM_LOW_LATENCY);
-            sapaClient = new SapaProcessor(this, null, new SapaProcessor.StatusListener() {
+        if (Build.VERSION.SDK_INT >= 21) { // Check if there is something in the headphone socket.
+            IntentFilter filter = new IntentFilter(Intent.ACTION_HEADSET_PLUG);
+            registerReceiver(new BroadcastReceiver() {
                 @Override
-                public void onKilled() {
-                    sapaService.stop(true);
-                    finish();
+                public void onReceive(Context context, Intent intent) {
+                    if (intent.getAction().equals(Intent.ACTION_HEADSET_PLUG)) {
+                        int state = intent.getIntExtra("state", -1);
+                        headphoneSocket = (state > 0);
+                    }
                 }
-            });
-            sapaService.register(sapaClient);
-        } catch (SsdkUnsupportedException | InstantiationException | AndroidRuntimeException e) {
-            sapaService = null;
-            sapaClient = null;
+            }, filter);
         }
 
-        // If there is no Samsung Professional Audio SDK.
+        if (Build.VERSION.SDK_INT >= 23) { // Check for the pro audio flag.
+            proAudioFlag = getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO);
+        }
+
+        // Use the Samsung Professional Audio SDK, if available.
+        if ((Build.VERSION.SDK_INT >= 21) && sapaPermissions && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("sapa", true)) {
+            try {
+                Sapa sapa = new Sapa();
+                sapa.initialize(this);
+                sapaService = new SapaService();
+                sapaService.stop(true);
+                sapaService.start(SapaService.START_PARAM_LOW_LATENCY);
+                sapaClient = new SapaProcessor(this, null, new SapaProcessor.StatusListener() {
+                    @Override
+                    public void onKilled() {
+                        sapaService.stop(true);
+                        finish();
+                    }
+                });
+                sapaService.register(sapaClient);
+            } catch (SsdkUnsupportedException | InstantiationException | AndroidRuntimeException e) {
+                sapaService = null;
+                sapaClient = null;
+            }
+        }
+
+        // OpenSL ES with fast mixer, if there is no SAPA.
         if (sapaClient == null) {
             System.loadLibrary("SuperpoweredLatency");
             // Get the device's sample rate and buffer size to enable low-latency Android audio output, if available.
@@ -202,12 +260,12 @@ public class MainActivity extends ActionBarActivity {
                     if (!bufferSizeOverride && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)) {
                         // Uploading the result to our server. Results with native buffer sizes are reported only.
                         network.setText("Uploading data...");
-                        long sapa = (sapaService == null) ? 0 : 1;
-                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + sapa)
+                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + ((sapaService == null) ? 0 : 1) + "&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0))
                                 .buildUpon()
                                 .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
                                 .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))
                                 .appendQueryParameter("build", encodeString(Build.VERSION.INCREMENTAL))
+                                .appendQueryParameter("buildid", encodeString(Build.ID))
                                 .build().toString();
                         new HTTPGetTask().execute(url);
                     } else {
@@ -296,16 +354,29 @@ public class MainActivity extends ActionBarActivity {
 
     // This performs the data upload to our server.
     private class HTTPGetTask extends AsyncTask<String, Void, Boolean> {
-        protected Boolean doInBackground(String... url) {
+        protected Boolean doInBackground(String... param) {
+            boolean okay = false;
             try {
-                HttpGet get = new HttpGet(url[0]);
-                get.addHeader("Cache-Control", "no-cache");
-                DefaultHttpClient client = new DefaultHttpClient();
-                HttpResponse response = client.execute(get);
-                return (EntityUtils.toString(response.getEntity()).length() == 2);
+                URL url = new URL(param[0]);
+                HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Cache-Control", "no-cache");
+                try {
+                    InputStream in = connection.getInputStream();
+                    InputStreamReader reader = new InputStreamReader(in);
+                    for (int bytesRead = 0; bytesRead < 5; bytesRead++) if (reader.read() < 0) {
+                        if (bytesRead == 2) okay = true;
+                        break;
+                    }
+                } catch(Exception e) {
+                    e.printStackTrace();
+                } finally {
+                    connection.disconnect();
+                }
             } catch (IOException e) {
                 return false;
             }
+            return okay;
         }
 
         @Override
