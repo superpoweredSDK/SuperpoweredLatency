@@ -28,7 +28,7 @@ endif
 
 # build the JNI for OpenSL ES
 include $(CLEAR_VARS)  
-LOCAL_MODULE := SuperpoweredLatency 
+LOCAL_MODULE := SuperpoweredLatency
 LOCAL_SRC_FILES := SuperpoweredLatency.cpp latencyMeasurer.cpp
 
 LOCAL_LDLIBS := -llog -landroid -lOpenSLES 

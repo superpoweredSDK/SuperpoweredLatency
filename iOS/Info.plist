@@ -27,6 +27,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>To measure the round-trip audio latency.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

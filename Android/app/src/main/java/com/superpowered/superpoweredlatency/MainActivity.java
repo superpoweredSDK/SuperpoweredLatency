@@ -3,6 +3,10 @@ package com.superpowered.superpoweredlatency;
 import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.pm.PackageManager;
+import android.os.IBinder;
+import android.os.IInterface;
+import android.os.Parcel;
+import android.os.RemoteException;
 import android.preference.PreferenceManager;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
@@ -24,6 +28,7 @@ import android.os.Handler;
 import android.net.Uri;
 import android.os.AsyncTask;
 
+import java.io.FileDescriptor;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.io.InputStream;
@@ -165,7 +170,6 @@ public class MainActivity extends ActionBarActivity {
             }
             if (samplerateString == null) samplerateString = "44100";
             if (buffersizeString == null) buffersizeString = "512";
-            else if (Build.VERSION.SDK_INT >= 19) buffersizeString = "-" + buffersizeString; // Indicate Android 4.4 or higher with negating the buffer size.
 
             // Override the buffer size if needed.
             String manualBuffersize = PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getString("manual_buffersize", "0");
@@ -174,6 +178,7 @@ public class MainActivity extends ActionBarActivity {
                 buffersizeString = manualBuffersize;
                 bufferSizeOverride = true;
             };
+            if (Build.VERSION.SDK_INT >= 19) buffersizeString = "-" + buffersizeString; // Indicate Android 4.4 or higher with negating the buffer size.
 
             // Call the native lib to set up.
             SuperpoweredLatency(Integer.parseInt(samplerateString), Integer.parseInt(buffersizeString));
@@ -238,9 +243,11 @@ public class MainActivity extends ActionBarActivity {
                     website.setVisibility(View.INVISIBLE);
 
                     long samplerate, buffersize;
+                    boolean superpowered = false;
                     if (sapaService == null) {
                         samplerate = getSamplerate();
                         buffersize = getBuffersize();
+                        superpowered = getSuperpowered();
                     } else {
                         ByteBuffer buffer = sapaClient.queryData("r", 0);
                         if (buffer == null) return;
@@ -260,7 +267,7 @@ public class MainActivity extends ActionBarActivity {
                     if (!bufferSizeOverride && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)) {
                         // Uploading the result to our server. Results with native buffer sizes are reported only.
                         network.setText("Uploading data...");
-                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + ((sapaService == null) ? 0 : 1) + "&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0))
+                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + ((sapaService == null) ? 0 : 1) + "&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0) + "&superpowered=" + (superpowered ? 1 : 0))
                                 .buildUpon()
                                 .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
                                 .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))
@@ -351,6 +358,7 @@ public class MainActivity extends ActionBarActivity {
     private native int getLatencyMs();
     private native int getSamplerate();
     private native int getBuffersize();
+    private native boolean getSuperpowered();
 
     // This performs the data upload to our server.
     private class HTTPGetTask extends AsyncTask<String, Void, Boolean> {

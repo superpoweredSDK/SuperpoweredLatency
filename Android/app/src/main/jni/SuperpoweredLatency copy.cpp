@@ -6,15 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <android/log.h>
-#include <math.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <errno.h>
-
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "superpoweredlatency", __VA_ARGS__)
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "superpoweredlatency", __VA_ARGS__)
+#include <sys/system_properties.h>
 
 /*
  These functions wrap the measurer, bridge it to Java, and set up audio I/O using OpenSL ES.
@@ -31,89 +23,8 @@ static int inputBufferWrite, inputBufferRead, inputBuffersAvailable, outputBuffe
 
 static latencyMeasurer *measurer = NULL;
 
-static bool superpoweredIO = false;
-static bool superpoweredThreadLaunched = false;
-static void *socketThread(void *param) {
-    struct sched_param p;
-    p.sched_priority = 0;
-    int policy = 0;
-    pthread_getschedparam(pthread_self(), &policy, &p);
-    LOGI("Superpowered client thread policy is %sSCHED_FIFO, priority: %i.", policy == SCHED_FIFO ? "" : "not ", p.sched_priority);
-
-    short int *buf = (short int *)memalign(16, 1040 * 4);
-
-    while (true) {
-        int sck = socket(AF_LOCAL, SOCK_STREAM, 0);
-        if (sck < 0) {
-            LOGE("Superpowered client socket create error. (%i %s)", errno, strerror(errno));
-            break;
-        } else {
-            struct timeval timeout;
-            timeout.tv_sec = 10;
-            timeout.tv_usec = 0;
-            setsockopt(sck, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
-            const char *name = "SuperpoweredAudio";
-            struct sockaddr_un address;
-            memset(&address, 0, sizeof(address));
-            int namelen = strlen(name);
-            address.sun_path[0] = 0;
-            memcpy(address.sun_path + 1, name, namelen);
-            address.sun_family = AF_LOCAL;
-            int alen = namelen + offsetof(struct sockaddr_un, sun_path) + 1;
-
-            if (connect(sck, (struct sockaddr *)&address, alen) < 0) LOGE("Superpowered client socket connect error. (%i %s)", errno, strerror(errno));
-            else {
-                timeout.tv_sec = 1;
-                timeout.tv_usec = 0;
-                setsockopt(sck, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-                setsockopt(sck, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
-                int status = -1;
-                if (recv(sck, &status, sizeof(status), 0) == sizeof(status)) {
-                    if (status != 0) LOGE("Superpowered client socket is busy.");
-                    else {
-                        superpoweredIO = true;
-                        LOGI("Superpowered audio IO!");
-                        int *bufint = (int *)buf;
-                        while (true) {
-                            int bufferSize = recv(sck, buf, 1040 * 4, 0);
-                            if (bufferSize > 0) {
-                                if (bufint[0] < 1) continue; // Keep alive.
-                                // Process audio here.
-                                // bufint[0] is numberOfSamples
-                                // bufint[1] is samplerate
-                                // buf + 8 is the actual audio data (16-bit stereo interleaved)
-                                measurer->processInput(buf + 8, bufint[1], bufint[0]);
-                                measurer->processOutput(buf + 8);
-
-                                send(sck, buf, bufferSize, 0);
-                            } else if (bufferSize < 0) {
-                                if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) continue; else break;
-                            } else break;
-                        };
-                        superpoweredIO = false;
-                    };
-                } else LOGE("Superpowered client socket handshake error.");
-            };
-            close(sck);
-            usleep(100000);
-        };
-    };
-
-    free(buf);
-    pthread_detach(pthread_self());
-    pthread_exit(NULL);
-    return NULL;
-}
-
 // Audio input comes here.
 static void inputCallback(SLAndroidSimpleBufferQueueItf caller, void *pContext) {
-    if (superpoweredIO) {
-        (*caller)->Enqueue(caller, inputBuffers[0], buffersize * 4);
-        return;
-    }
-
     pthread_mutex_lock(&mutex);
     short int *inputBuffer = inputBuffers[inputBufferWrite];
     if (inputBuffersAvailable == 0) inputBufferRead = inputBufferWrite;
@@ -121,22 +32,12 @@ static void inputCallback(SLAndroidSimpleBufferQueueItf caller, void *pContext) 
     if (inputBufferWrite < numBuffers - 1) inputBufferWrite++; else inputBufferWrite = 0;
     pthread_mutex_unlock(&mutex);
 
-    measurer->processInput(inputBuffer, samplerate, buffersize);
     (*caller)->Enqueue(caller, inputBuffer, buffersize * 4);
+    measurer->processInput(inputBuffer, samplerate, buffersize);
 }
 
 // Audio output must be provided here.
 static void outputCallback(SLAndroidSimpleBufferQueueItf caller, void *pContext) {
-    if (superpoweredIO) {
-        (*caller)->Enqueue(caller, outputBuffers[0], buffersize * 4);
-        return;
-    }
-    if (!superpoweredThreadLaunched) {
-        superpoweredThreadLaunched = true;
-        pthread_t thread;
-        pthread_create(&thread, NULL, socketThread, NULL);
-    };
-
 	short int *outputBuffer = outputBuffers[outputBufferIndex];
     pthread_mutex_lock(&mutex);
 
@@ -153,8 +54,8 @@ static void outputCallback(SLAndroidSimpleBufferQueueItf caller, void *pContext)
         if (measurer->state == -1) memcpy(outputBuffer, inputBuffer, buffersize * 4);
    	};
 
+   	(*caller)->Enqueue(caller, outputBuffer, buffersize * 4);
    	if (outputBufferIndex < numBuffers - 1) outputBufferIndex++; else outputBufferIndex = 0;
-    (*caller)->Enqueue(caller, outputBuffer, buffersize * 4);
 }
 
 // Ugly Java-native bridges - JNI, that is.
@@ -162,20 +63,18 @@ extern "C" {
     JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(JNIEnv *javaEnvironment, jobject self, jlong _samplerate, jlong _buffersize);
     JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_toggleMeasurer(JNIEnv *javaEnvironment, jobject self);
     JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_togglePassThrough(JNIEnv *javaEnvironment, jobject self);
-    JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getState(JNIEnv *javaEnvironment, jobject self);
-    JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(JNIEnv *javaEnvironment, jobject self);
-    JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(JNIEnv *javaEnvironment, jobject self);
-    JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(JNIEnv *javaEnvironment, jobject self);
-    JNIEXPORT jboolean Java_com_superpowered_superpoweredlatency_MainActivity_getSuperpowered(JNIEnv *javaEnvironment, jobject self);
+    JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getState(JNIEnv *javaEnvironment, jobject self);
+    JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(JNIEnv *javaEnvironment, jobject self);
+    JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(JNIEnv *javaEnvironment, jobject self);
+    JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(JNIEnv *javaEnvironment, jobject self);
 }
 
 JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_toggleMeasurer(JNIEnv *javaEnvironment, jobject self) { measurer->toggle(); }
 JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_togglePassThrough(JNIEnv *javaEnvironment, jobject self) { measurer->togglePassThrough(); }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getState(JNIEnv *javaEnvironment, jobject self) { return measurer->state; }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(JNIEnv *javaEnvironment, jobject self) { return measurer->latencyMs; }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(JNIEnv *javaEnvironment, jobject self) { return measurer->samplerate; }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(JNIEnv *javaEnvironment, jobject self) { return measurer->buffersize; }
-JNIEXPORT jboolean Java_com_superpowered_superpoweredlatency_MainActivity_getSuperpowered(JNIEnv *javaEnvironment, jobject self) { return superpoweredIO; }
+JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getState(JNIEnv *javaEnvironment, jobject self) { return measurer->state; }
+JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(JNIEnv *javaEnvironment, jobject self) { return measurer->latencyMs; }
+JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(JNIEnv *javaEnvironment, jobject self) { return measurer->samplerate; }
+JNIEXPORT int Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(JNIEnv *javaEnvironment, jobject self) { return measurer->buffersize; }
 
 // Set up audio and measurer.
 JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(JNIEnv *javaEnvironment, jobject self, jlong _samplerate, jlong _buffersize) {
@@ -215,7 +114,7 @@ JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_Superpower
 	SLDataLocator_IODevice deviceInputLocator = { SL_DATALOCATOR_IODEVICE, SL_IODEVICE_AUDIOINPUT, SL_DEFAULTDEVICEID_AUDIOINPUT, NULL };
 	SLDataSource inputSource = { &deviceInputLocator, NULL };
 	SLDataLocator_AndroidSimpleBufferQueue inputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
-	SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, 2, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
+	SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, 2, samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
 	SLDataSink inputSink = { &inputLocator, &inputFormat };
 	const SLInterfaceID inputInterfaces[2] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
 	(*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &inputBufferQueue, &inputSource, &inputSink, 2, inputInterfaces, requireds);
@@ -230,7 +129,7 @@ JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_Superpower
 
 	// Create the output buffer queue.
 	SLDataLocator_AndroidSimpleBufferQueue outputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
-	SLDataFormat_PCM outputFormat = { SL_DATAFORMAT_PCM, 2, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
+	SLDataFormat_PCM outputFormat = { SL_DATAFORMAT_PCM, 2, samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
 	SLDataSource outputSource = { &outputLocator, &outputFormat };
     const SLInterfaceID outputInterfaces[1] = { SL_IID_BUFFERQUEUE };
     SLDataSink outputSink = { &outputMixLocator, NULL };
