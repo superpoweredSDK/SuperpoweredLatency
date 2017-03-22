@@ -31,6 +31,7 @@ static int inputBufferWrite, inputBufferRead, inputBuffersAvailable, outputBuffe
 
 static latencyMeasurer *measurer = NULL;
 
+// Test with Superpowered Media Server
 static bool superpoweredIO = false;
 static bool superpoweredThreadLaunched = false;
 static void *socketThread(void *param) {

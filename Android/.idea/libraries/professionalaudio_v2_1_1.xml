@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="professionalaudio-v2.1.1">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/app/src/main/jar/professionalaudio-v2.1.1.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

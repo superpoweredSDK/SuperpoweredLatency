@@ -14,6 +14,7 @@ import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.util.AndroidRuntimeException;
 import android.util.Base64;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.media.AudioManager;
@@ -37,6 +38,7 @@ import java.io.IOException;
 import android.content.Intent;
 import android.content.IntentFilter;
 
+import com.google.vr.ndk.base.AndroidCompat;
 import com.samsung.android.sdk.SsdkUnsupportedException;
 import com.samsung.android.sdk.professionalaudio.Sapa;
 import com.samsung.android.sdk.professionalaudio.SapaProcessor;
@@ -65,6 +67,10 @@ public class MainActivity extends ActionBarActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        if ((Build.VERSION.SDK_INT >= 24) && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("vrmode", false)) {
+            AndroidCompat.setVrModeEnabled(this, true);
+        }
 
         if (Build.VERSION.SDK_INT >= 23) { // Need to ask for permissions.
             String[] permissions = {
