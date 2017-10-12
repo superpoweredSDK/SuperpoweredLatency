@@ -1,49 +1,43 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 24
-    buildToolsVersion '25.0.0'
+    compileSdkVersion 26
+    buildToolsVersion '26.0.0'
 
     defaultConfig {
         applicationId "com.superpowered.superpoweredlatency"
         minSdkVersion 19
-        targetSdkVersion 24
-        versionCode 3
-        versionName "1.6"
+        targetSdkVersion 26
+        versionCode 4
+        versionName "1.7"
 
-        sourceSets.main {
-            jniLibs.srcDir 'src/main/libs'
-            jni.srcDirs = []
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_PLATFORM=android-26', '-DANDROID_TOOLCHAIN=clang', '-DANDROID_ARM_NEON=TRUE', '-DANDROID_STL=gnustl_static'
+                cFlags '-O3', '-fsigned-char' // full optimization, char data type is signed
+                cppFlags '-fsigned-char'
+            }
         }
     }
 
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jni']
         }
     }
-    task ndkBuild(type: Exec) {
-        Properties properties = new Properties()
-        properties.load(project.rootProject.file('local.properties').newDataInputStream())
-        def ndkDir = properties.getProperty('ndk.dir')
-        commandLine "$ndkDir/ndk-build", '-B', '-C', file('src/main/jni').absolutePath
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/jni/CMakeLists.txt'
+        }
     }
 
     lintOptions {
-        abortOnError false
-    }
-
-    tasks.withType(JavaCompile) {
-        compileTask -> compileTask.dependsOn ndkBuild
+        disable 'SetTextI18n'
     }
 }
 
 dependencies {
-    compile 'com.google.vr:sdk-audio:1.10.0'
-    compile 'com.google.vr:sdk-base:1.10.0'
     compile fileTree(dir: 'libs', include: ['*.jar'])
-    compile 'com.android.support:appcompat-v7:24.2.1'
-    compile files('src/main/jar/professionalaudio-v2.1.1.jar')
-    compile files('src/main/jar/sdk-v1.0.0.jar')
+    compile 'com.android.support:appcompat-v7:26.0.0'
 }

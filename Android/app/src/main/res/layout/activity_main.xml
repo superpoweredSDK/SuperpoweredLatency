@@ -23,7 +23,8 @@
         android:paddingBottom="15dp"
         android:textColor="#4D4D4D"
         android:onClick="onSettings"
-        android:autoText="true" />
+        android:autoText="true"
+        tools:ignore="HardcodedText" />
     <TextView
         android:layout_width="fill_parent"
         android:layout_height="wrap_content"
@@ -42,7 +43,8 @@
         android:paddingRight="15dp"
         android:textColor="#999999"
         android:onClick="onSettings"
-        android:autoText="true" />
+        android:autoText="true"
+        tools:ignore="HardcodedText" />
 
     <View
         android:layout_width="fill_parent"
@@ -65,7 +67,8 @@
         android:layout_below="@+id/header_border"
         android:layout_marginTop="10dp"
         android:textColor="#5f5f5f"
-        android:layout_marginLeft="15dp" />
+        android:layout_marginLeft="15dp"
+        tools:ignore="HardcodedText" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -80,7 +83,8 @@
         android:layout_marginRight="15dp"
         android:layout_alignParentRight="true"
         android:textIsSelectable="true"
-        android:fontFamily="sans-serif-light" />
+        android:fontFamily="sans-serif-light"
+        tools:ignore="HardcodedText" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -92,7 +96,8 @@
         android:textColor="#5f5f5f"
         android:layout_below="@+id/modellabel"
         android:singleLine="false"
-        android:layout_marginLeft="15dp" />
+        android:layout_marginLeft="15dp"
+        tools:ignore="HardcodedText" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -107,7 +112,8 @@
         android:fontFamily="sans-serif-light"
         android:layout_alignTop="@+id/oslabel"
         android:layout_alignParentRight="true"
-        android:layout_marginRight="15dp" />
+        android:layout_marginRight="15dp"
+        tools:ignore="HardcodedText" />
 
     <View
         android:layout_width="fill_parent"
@@ -160,7 +166,8 @@
             android:fontFamily="sans-serif-light"
             android:textColor="#000000"
             android:layout_marginTop="50dp"
-            android:autoText="false" />
+            android:autoText="false"
+            tools:ignore="HardcodedText" />
 
         <ProgressBar
             style="?android:attr/progressBarStyleHorizontal"
@@ -191,7 +198,8 @@
             android:layout_marginTop="10dp"
             android:textColor="#5f5f5f"
             android:layout_marginLeft="15dp"
-            android:layout_alignParentTop="false" />
+            android:layout_alignParentTop="false"
+            tools:ignore="HardcodedText" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -206,7 +214,8 @@
             android:layout_alignParentRight="true"
             android:textIsSelectable="true"
             android:fontFamily="sans-serif-light"
-            android:layout_alignTop="@+id/mslabel" />
+            android:layout_alignTop="@+id/mslabel"
+            tools:ignore="HardcodedText" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -218,7 +227,8 @@
             android:textColor="#5f5f5f"
             android:layout_marginLeft="15dp"
             android:layout_alignParentTop="false"
-            android:layout_below="@+id/mslabel" />
+            android:layout_below="@+id/mslabel"
+            tools:ignore="HardcodedText" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -233,7 +243,8 @@
             android:layout_alignParentRight="true"
             android:textIsSelectable="true"
             android:fontFamily="sans-serif-light"
-            android:layout_alignTop="@+id/buffersizelabel" />
+            android:layout_alignTop="@+id/buffersizelabel"
+            tools:ignore="HardcodedText" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -245,7 +256,8 @@
             android:textColor="#5f5f5f"
             android:layout_marginLeft="15dp"
             android:layout_alignParentTop="false"
-            android:layout_below="@+id/buffersizelabel" />
+            android:layout_below="@+id/buffersizelabel"
+            tools:ignore="HardcodedText" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -260,7 +272,37 @@
             android:layout_alignParentRight="true"
             android:textIsSelectable="true"
             android:fontFamily="sans-serif-light"
-            android:layout_alignTop="@+id/sampleratelabel" />
+            android:layout_alignTop="@+id/sampleratelabel"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAppearance="?android:attr/textAppearanceSmall"
+            android:text="API:"
+            android:id="@+id/apilabel"
+            android:layout_marginTop="10dp"
+            android:textColor="#5f5f5f"
+            android:layout_marginLeft="15dp"
+            android:layout_alignParentTop="false"
+            android:layout_below="@+id/sampleratelabel"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAppearance="?android:attr/textAppearanceSmall"
+            android:text="OpenSL ES"
+            android:id="@+id/api"
+            android:textColor="#5f5f5f"
+            android:singleLine="true"
+            android:textAlignment="textEnd"
+            android:layout_marginRight="15dp"
+            android:layout_alignParentRight="true"
+            android:textIsSelectable="true"
+            android:fontFamily="sans-serif-light"
+            android:layout_alignTop="@+id/apilabel"
+            tools:ignore="HardcodedText" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -269,7 +311,7 @@
             android:text="@string/thankyou"
             android:id="@+id/network"
             android:singleLine="false"
-            android:layout_below="@+id/sampleratelabel"
+            android:layout_below="@+id/apilabel"
             android:layout_alignParentLeft="true"
             android:layout_alignParentStart="true"
             android:autoText="false"
@@ -303,7 +345,8 @@
             android:layout_alignWithParentIfMissing="false"
             android:gravity="center"
             android:textAlignment="center"
-            android:onClick="onLatency" />
+            android:onClick="onLatency"
+            tools:ignore="HardcodedText" />
 
     </RelativeLayout>
 
@@ -353,6 +396,7 @@
         android:paddingBottom="10dp"
         android:width="200dp"
         android:fontFamily="sans-serif-light"
-        android:onClick="onButton" />
+        android:onClick="onButton"
+        tools:ignore="HardcodedText" />
 
 </RelativeLayout>

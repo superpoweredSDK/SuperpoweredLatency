@@ -1,25 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
     <CheckBoxPreference
-        android:key="sapa"
-        android:title="Samsung Professional Audio SDK"
-        android:summary="Needs app relaunch to take effect."
-        android:defaultValue="true" />
-    <CheckBoxPreference
         android:key="submit"
         android:title="Submit Results to Superpowered"
         android:summary="Personal information is not collected."
         android:defaultValue="true" />
     <CheckBoxPreference
-        android:key="vrmode"
-        android:title="Launch in VR Mode"
-        android:summary="Needs app relaunch to take effect."
+        android:key="aaudio"
+        android:title="Use AAudio if available"
+        android:summary="Will not submit the result to Superpowered."
         android:defaultValue="false" />
-    <EditTextPreference
-        android:key="manual_buffersize"
-        android:dialogMessage="Enter 0 for automatic."
-        android:title="OpenSL ES Buffer Size"
-        android:inputType="number"
-        android:summary="Needs app relaunch to take effect."
-        android:defaultValue="0" />
 </PreferenceScreen>

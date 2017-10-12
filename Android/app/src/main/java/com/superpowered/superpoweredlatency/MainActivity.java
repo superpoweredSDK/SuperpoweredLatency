@@ -3,18 +3,13 @@ package com.superpowered.superpoweredlatency;
 import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.pm.PackageManager;
-import android.os.IBinder;
-import android.os.IInterface;
-import android.os.Parcel;
-import android.os.RemoteException;
 import android.preference.PreferenceManager;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
-import android.util.AndroidRuntimeException;
+import android.support.v7.app.AppCompatActivity;
+import android.support.annotation.NonNull;
 import android.util.Base64;
-import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.media.AudioManager;
@@ -29,7 +24,6 @@ import android.os.Handler;
 import android.net.Uri;
 import android.os.AsyncTask;
 
-import java.io.FileDescriptor;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.io.InputStream;
@@ -38,15 +32,7 @@ import java.io.IOException;
 import android.content.Intent;
 import android.content.IntentFilter;
 
-import com.google.vr.ndk.base.AndroidCompat;
-import com.samsung.android.sdk.SsdkUnsupportedException;
-import com.samsung.android.sdk.professionalaudio.Sapa;
-import com.samsung.android.sdk.professionalaudio.SapaProcessor;
-import com.samsung.android.sdk.professionalaudio.SapaService;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-
-public class MainActivity extends ActionBarActivity {
+public class MainActivity extends AppCompatActivity {
     TextView button = null;
     TextView infoView = null;
     TextView status = null;
@@ -57,45 +43,39 @@ public class MainActivity extends ActionBarActivity {
     ProgressBar progress = null;
     int measurerState = -1000;
     private Handler handler;
-    private SapaService sapaService = null;
-    private SapaProcessor sapaClient = null;
-    private boolean bufferSizeOverride = false;
     private boolean headphoneSocket = false;
     private boolean proAudioFlag = false;
-    private boolean sapaPermissions = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        if ((Build.VERSION.SDK_INT >= 24) && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("vrmode", false)) {
-            AndroidCompat.setVrModeEnabled(this, true);
-        }
+        boolean didAskForPermissions = false;
 
         if (Build.VERSION.SDK_INT >= 23) { // Need to ask for permissions.
             String[] permissions = {
                     Manifest.permission.RECORD_AUDIO,
                     Manifest.permission.MODIFY_AUDIO_SETTINGS,
                     Manifest.permission.INTERNET,
-                    "com.samsung.android.sdk.professionalaudio.permission.START_MONITOR_SERVICE",
-                    "com.samsung.android.providers.context.permission.WRITE_USE_APP_FEATURE_SURVEY"
             };
+
             for (String s:permissions) if (ContextCompat.checkSelfPermission(this, s) != PackageManager.PERMISSION_GRANTED) {
+                didAskForPermissions = true;
                 ActivityCompat.requestPermissions(this, permissions, 0);
                 break;
             }
-        } else initialize();
+        }
+
+        if (!didAskForPermissions) initialize();
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String permissions[], @NonNull int[] grantResults) {
         if ((requestCode != 0) || (grantResults.length < 1) || (grantResults.length != permissions.length)) return;
         boolean canInitialize = true;
-        for (int n = 0; n < grantResults.length; n++) if (grantResults[n] != PackageManager.PERMISSION_GRANTED) {
-            if (n < 3) { // Record audio, modify audio settings and internet are showstoppers.
-                canInitialize = false;
-                Toast.makeText(getApplicationContext(), "Please allow all permissions for the Latency Test app.", Toast.LENGTH_LONG).show();
-            } else sapaPermissions = false; // There is no Samsung Professional Audio SDK available in this case.
+        for (int grantResult:grantResults) if (grantResult != PackageManager.PERMISSION_GRANTED) {
+            canInitialize = false;
+            Toast.makeText(getApplicationContext(), "Please allow all permissions for the Latency Test app.", Toast.LENGTH_LONG).show();
         }
         if (canInitialize) initialize();
     }
@@ -105,25 +85,25 @@ public class MainActivity extends ActionBarActivity {
 
         // Set up UI and display system information.
         try {
-            TextView title = (TextView)findViewById(R.id.header);
+            TextView title = findViewById(R.id.header);
             title.setText("Superpowered Latency Test v" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
         } catch (PackageManager.NameNotFoundException e) {
             e.printStackTrace();
         }
 
-        TextView model = (TextView)findViewById(R.id.model);
+        TextView model = findViewById(R.id.model);
         model.setText(Build.MANUFACTURER + " " + Build.MODEL);
-        TextView os = (TextView)findViewById(R.id.os);
+        TextView os = findViewById(R.id.os);
         os.setText("Android " + Build.VERSION.RELEASE + " " + Build.ID);
 
-        button = (TextView)findViewById(R.id.button);
-        infoView = (TextView)findViewById(R.id.infoview);
-        statusView = (RelativeLayout)findViewById(R.id.statusview);
-        resultsView = (RelativeLayout)findViewById(R.id.resultsview);
-        status = (TextView)findViewById(R.id.status);
-        network = (TextView)findViewById(R.id.network);
-        progress = (ProgressBar)findViewById(R.id.progress);
-        website = (TextView)findViewById(R.id.website);
+        button = findViewById(R.id.button);
+        infoView = findViewById(R.id.infoview);
+        statusView = findViewById(R.id.statusview);
+        resultsView = findViewById(R.id.resultsview);
+        status = findViewById(R.id.status);
+        network = findViewById(R.id.network);
+        progress = findViewById(R.id.progress);
+        website = findViewById(R.id.website);
 
         if (Build.VERSION.SDK_INT >= 21) { // Check if there is something in the headphone socket.
             IntentFilter filter = new IntentFilter(Intent.ACTION_HEADSET_PLUG);
@@ -142,63 +122,28 @@ public class MainActivity extends ActionBarActivity {
             proAudioFlag = getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO);
         }
 
-        // Use the Samsung Professional Audio SDK, if available.
-        if ((Build.VERSION.SDK_INT >= 21) && sapaPermissions && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("sapa", true)) {
-            try {
-                Sapa sapa = new Sapa();
-                sapa.initialize(this);
-                sapaService = new SapaService();
-                sapaService.stop(true);
-                sapaService.start(SapaService.START_PARAM_LOW_LATENCY);
-                sapaClient = new SapaProcessor(this, null, new SapaProcessor.StatusListener() {
-                    @Override
-                    public void onKilled() {
-                        sapaService.stop(true);
-                        finish();
-                    }
-                });
-                sapaService.register(sapaClient);
-            } catch (SsdkUnsupportedException | InstantiationException | AndroidRuntimeException e) {
-                sapaService = null;
-                sapaClient = null;
-            }
+        // Two native libs are built from the same code, one with and one without AAudio.
+        try {
+            System.loadLibrary("WithAAudio");
+        } catch (UnsatisfiedLinkError e) { // If AAudio is not present, use the other one without it.
+            System.loadLibrary("WithoutAAudio");
         }
 
-        // OpenSL ES with fast mixer, if there is no SAPA.
-        if (sapaClient == null) {
-            System.loadLibrary("SuperpoweredLatency");
-            // Get the device's sample rate and buffer size to enable low-latency Android audio output, if available.
-            String samplerateString = null, buffersizeString = null;
-            if (Build.VERSION.SDK_INT >= 17) {
-                AudioManager audioManager = (AudioManager) this.getSystemService(Context.AUDIO_SERVICE);
-                samplerateString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE);
-                buffersizeString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER);
-            }
-            if (samplerateString == null) samplerateString = "44100";
-            if (buffersizeString == null) buffersizeString = "512";
+        // Get the device's sample rate and buffer size to enable low-latency Android audio output, if available.
+        AudioManager audioManager = (AudioManager) this.getSystemService(Context.AUDIO_SERVICE);
+        String samplerateString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE);
+        String buffersizeString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER);
+        if (samplerateString == null) samplerateString = "48000";
+        if (buffersizeString == null) buffersizeString = "960";
 
-            // Override the buffer size if needed.
-            String manualBuffersize = PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getString("manual_buffersize", "0");
-            int manualBuffersizeInt = Integer.parseInt(manualBuffersize);
-            if ((manualBuffersizeInt >= 32) && (manualBuffersizeInt <= 2048)) {
-                buffersizeString = manualBuffersize;
-                bufferSizeOverride = true;
-            };
-            if (Build.VERSION.SDK_INT >= 19) buffersizeString = "-" + buffersizeString; // Indicate Android 4.4 or higher with negating the buffer size.
+        // Call the native lib to set up.
+        SuperpoweredLatency(Integer.parseInt(samplerateString), Integer.parseInt(buffersizeString));
 
-            // Call the native lib to set up.
-            SuperpoweredLatency(Integer.parseInt(samplerateString), Integer.parseInt(buffersizeString));
-        } else {
-            startService(new Intent(this, SapaStopService.class));
-            sapaClient.activate();
-        }
-
-        // Update UI every 40 ms.
+        // Update UI every 40 ms until UI_update returns with false.
         Runnable runnable = new Runnable() {
             @Override
             public void run() {
-                UI_update();
-                handler.postDelayed(this, 40);
+                if (UI_update()) handler.postDelayed(this, 40);
             }
         };
         handler = new Handler();
@@ -211,20 +156,10 @@ public class MainActivity extends ActionBarActivity {
     }
 
     // Called periodically to update the UI.
-    public void UI_update() {
+    public boolean UI_update() {
         // Get the current state and latency values.
-        long _state, _latencyMs;
-        if (sapaService == null) {
-            _state = getState();
-            _latencyMs = getLatencyMs();
-        } else {
-            ByteBuffer buffer = sapaClient.queryData("s", 0);
-            if (buffer == null) return;
-            _state = buffer.get(0);
-            buffer = sapaClient.queryData("l", 0);
-            if (buffer == null) return;
-            _latencyMs = buffer.get(0);
-        }
+        long _state = getState();
+        long _latencyMs = getLatencyMs();
 
         // Update the UI if the measurer's state has been changed.
         if ((measurerState != _state) || (_latencyMs < 0)) {
@@ -242,38 +177,30 @@ public class MainActivity extends ActionBarActivity {
                 if (_latencyMs == 0) {
                     status.setText("Dispersion too big, please try again.");
                     button.setText("Restart Test");
+                    toggleMeasurer(false); // Stopping the measurer.
                 } else {
                     infoView.setVisibility(View.INVISIBLE);
                     resultsView.setVisibility(View.VISIBLE);
                     statusView.setVisibility(View.INVISIBLE);
                     website.setVisibility(View.INVISIBLE);
 
-                    long samplerate, buffersize;
-                    boolean superpowered = false;
-                    if (sapaService == null) {
-                        samplerate = getSamplerate();
-                        buffersize = getBuffersize();
-                        superpowered = getSuperpowered();
-                    } else {
-                        ByteBuffer buffer = sapaClient.queryData("r", 0);
-                        if (buffer == null) return;
-                        buffer.order(ByteOrder.LITTLE_ENDIAN);
-                        samplerate = buffer.getInt();
-                        buffer = sapaClient.queryData("b", 0);
-                        if (buffer == null) return;
-                        buffer.order(ByteOrder.LITTLE_ENDIAN);
-                        buffersize = buffer.getInt();
-                    }
+                    long samplerate = getSamplerate();
+                    long buffersize = getBuffersize();
+                    boolean aaudio = getAAudio();
 
                     ((TextView)findViewById(R.id.latency)).setText(_latencyMs + " ms");
                     ((TextView)findViewById(R.id.buffersize)).setText(Long.toString(buffersize));
                     ((TextView)findViewById(R.id.samplerate)).setText(samplerate + " Hz");
+                    ((TextView)findViewById(R.id.api)).setText(aaudio ? "AAudio" : "OpenSL ES");
                     button.setText("Share Results");
 
-                    if (!bufferSizeOverride && PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)) {
+                    if (
+                            !PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("aaudio", false) &&
+                            PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)
+                            ) {
                         // Uploading the result to our server. Results with native buffer sizes are reported only.
                         network.setText("Uploading data...");
-                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=" + ((sapaService == null) ? 0 : 1) + "&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0) + "&superpowered=" + (superpowered ? 1 : 0))
+                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=0&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0) + "&aaudio=" + (aaudio ? 1 : 0))
                                 .buildUpon()
                                 .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
                                 .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))
@@ -285,6 +212,9 @@ public class MainActivity extends ActionBarActivity {
                         network.setText("");
                         website.setVisibility(View.VISIBLE);
                     }
+
+                    toggleMeasurer(false); // Stopping the measurer.
+                    return false; // Stopping periodical UI updates.
                 }
 
             // Measurement starts.
@@ -305,6 +235,7 @@ public class MainActivity extends ActionBarActivity {
                 }
             }
         }
+        return true;
     }
 
     // When the user taps on the main button.
@@ -318,16 +249,8 @@ public class MainActivity extends ActionBarActivity {
             share.putExtra(Intent.EXTRA_TEXT, message);
             startActivity(Intent.createChooser(share, "Share Results"));
         } else {
-            long state;
-            if (sapaService == null) {
-                toggleMeasurer();
-                state = getState();
-            } else {
-                sapaClient.sendCommand("t");
-                ByteBuffer buffer = sapaClient.queryData("s", 0);
-                if (buffer == null) return;
-                state = buffer.get(0);
-            }
+            toggleMeasurer(PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("aaudio", false));
+            long state = getState();
             button.setText(state > 0 ? "Cancel" : "Start Latency Test");
         }
     }
@@ -359,12 +282,12 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private native void SuperpoweredLatency(long samplerate, long buffersize);
-    private native void toggleMeasurer();
+    private native void toggleMeasurer(boolean useAAudioIfAvailable);
     private native int getState();
     private native int getLatencyMs();
     private native int getSamplerate();
     private native int getBuffersize();
-    private native boolean getSuperpowered();
+    private native boolean getAAudio();
 
     // This performs the data upload to our server.
     private class HTTPGetTask extends AsyncTask<String, Void, Boolean> {

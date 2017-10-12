@@ -1,256 +1,331 @@
 #include "latencyMeasurer.h"
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
-#include <pthread.h>
-#include <jni.h>
 #include <stdlib.h>
-#include <stdio.h>
-#include <android/log.h>
-#include <math.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <pthread.h>
+#include <string.h>
 #include <unistd.h>
-#include <errno.h>
+#include <pthread.h>
+#include <android/log.h>
+#if HAS_AAUDIO == 1
+#include <aaudio/AAudio.h>
+#endif
 
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "superpoweredlatency", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "superpoweredlatency", __VA_ARGS__)
 
-/*
- These functions wrap the measurer, bridge it to Java, and set up audio I/O using OpenSL ES.
- We need two buffer queues, one for input and one for the output.
- Each buffer queue operates with 1 or 2 input buffers (depending on Android version).
-*/
+static int samplerate;
+static int buffersize;
+static latencyMeasurer *measurer;
+static bool hasAAudio = false;
+static bool isRunning = false;
 
-static SLObjectItf openSLEngine, outputMix, outputBufferQueue, inputBufferQueue;
-static SLAndroidSimpleBufferQueueItf outputBufferQueueInterface, inputBufferQueueInterface;
-static pthread_mutex_t mutex;
+// ---------
+// OPENSL ES
+// ---------
 
-static short int *inputBuffers[2], *outputBuffers[2];
-static int inputBufferWrite, inputBufferRead, inputBuffersAvailable, outputBufferIndex, samplerate, buffersize, numBuffers;
+#define NUMOPENSLESBUFFERS 128
+static struct {
+    SLObjectItf engine, outputMix, outputBufferQueue, inputBufferQueue;
+    SLAndroidSimpleBufferQueueItf outputBufferQueueInterface, inputBufferQueueInterface;
+    short int *inputBuffers[NUMOPENSLESBUFFERS], *outputBuffers[NUMOPENSLESBUFFERS];
+    int samplerateFromJava, buffersizeFromJava, inputBufferWriteIndex, inputBufferReadIndex, inputBuffersAvailable, outputBufferWriteIndex;
+} openSLES;
 
-static latencyMeasurer *measurer = NULL;
+// Audio input comes here.
+static void openSLESInputCallback(SLAndroidSimpleBufferQueueItf caller, __unused void *pContext) {
+    __sync_fetch_and_add(&openSLES.inputBuffersAvailable, 1);
+    short int *inputBuffer = openSLES.inputBuffers[openSLES.inputBufferWriteIndex];
+    if (openSLES.inputBufferWriteIndex < NUMOPENSLESBUFFERS - 1) openSLES.inputBufferWriteIndex++; else openSLES.inputBufferWriteIndex = 0;
+    (*caller)->Enqueue(caller, inputBuffer, (SLuint32)buffersize * 4);
+}
 
-// Test with Superpowered Media Server
-static bool superpoweredIO = false;
-static bool superpoweredThreadLaunched = false;
-static void *socketThread(void *param) {
-    struct sched_param p;
-    p.sched_priority = 0;
-    int policy = 0;
-    pthread_getschedparam(pthread_self(), &policy, &p);
-    LOGI("Superpowered client thread policy is %sSCHED_FIFO, priority: %i.", policy == SCHED_FIFO ? "" : "not ", p.sched_priority);
+// Audio output must be provided here.
+static void openSLESOutputCallback(SLAndroidSimpleBufferQueueItf caller, __unused void *pContext) {
+    short int *outputBuffer = openSLES.outputBuffers[openSLES.outputBufferWriteIndex];
+    if (openSLES.outputBufferWriteIndex < NUMOPENSLESBUFFERS - 1) openSLES.outputBufferWriteIndex++; else openSLES.outputBufferWriteIndex = 0;
 
-    short int *buf = (short int *)memalign(16, 1040 * 4);
+    if (__sync_fetch_and_add(&openSLES.inputBuffersAvailable, 0) > 0) {
+        __sync_fetch_and_add(&openSLES.inputBuffersAvailable, -1);
+        short int *inputBuffer = openSLES.inputBuffers[openSLES.inputBufferReadIndex];
+        if (openSLES.inputBufferReadIndex < NUMOPENSLESBUFFERS - 1) openSLES.inputBufferReadIndex++; else openSLES.inputBufferReadIndex = 0;
 
-    while (true) {
-        int sck = socket(AF_LOCAL, SOCK_STREAM, 0);
-        if (sck < 0) {
-            LOGE("Superpowered client socket create error. (%i %s)", errno, strerror(errno));
-            break;
-        } else {
-            struct timeval timeout;
-            timeout.tv_sec = 10;
-            timeout.tv_usec = 0;
-            setsockopt(sck, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        measurer->processInput(inputBuffer, samplerate, buffersize);
+        measurer->processOutput(outputBuffer);
+        if (measurer->state == -1) memcpy(outputBuffer, inputBuffer, (size_t)buffersize * 4);
+    } else memset(outputBuffer, 0, (size_t)buffersize * 4);
 
-            const char *name = "SuperpoweredAudio";
-            struct sockaddr_un address;
-            memset(&address, 0, sizeof(address));
-            int namelen = strlen(name);
-            address.sun_path[0] = 0;
-            memcpy(address.sun_path + 1, name, namelen);
-            address.sun_family = AF_LOCAL;
-            int alen = namelen + offsetof(struct sockaddr_un, sun_path) + 1;
+    (*caller)->Enqueue(caller, outputBuffer, (SLuint32)buffersize * 4);
+}
 
-            if (connect(sck, (struct sockaddr *)&address, alen) < 0) LOGE("Superpowered client socket connect error. (%i %s)", errno, strerror(errno));
-            else {
-                timeout.tv_sec = 1;
-                timeout.tv_usec = 0;
-                setsockopt(sck, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-                setsockopt(sck, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+static void startOpenSLES() {
+    hasAAudio = false;
+    samplerate = openSLES.samplerateFromJava;
+    buffersize = openSLES.buffersizeFromJava;
 
-                int status = -1;
-                if (recv(sck, &status, sizeof(status), 0) == sizeof(status)) {
-                    if (status != 0) LOGE("Superpowered client socket is busy.");
-                    else {
-                        superpoweredIO = true;
-                        LOGI("Superpowered audio IO!");
-                        int *bufint = (int *)buf;
-                        while (true) {
-                            int bufferSize = recv(sck, buf, 1040 * 4, 0);
-                            if (bufferSize > 0) {
-                                if (bufint[0] < 1) continue; // Keep alive.
-                                // Process audio here.
-                                // bufint[0] is numberOfSamples
-                                // bufint[1] is samplerate
-                                // buf + 8 is the actual audio data (16-bit stereo interleaved)
-                                measurer->processInput(buf + 8, bufint[1], bufint[0]);
-                                measurer->processOutput(buf + 8);
+    openSLES.inputBufferWriteIndex = 1; // Start from 1, because we enqueue one buffer when we start the input buffer queue.
+    openSLES.inputBufferReadIndex = 0;
+    openSLES.inputBuffersAvailable = 0;
+    openSLES.outputBufferWriteIndex = 1; // Start from 1, because we enqueue one buffer when we start the output buffer queue.
 
-                                send(sck, buf, bufferSize, 0);
-                            } else if (bufferSize < 0) {
-                                if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) continue; else break;
-                            } else break;
-                        };
-                        superpoweredIO = false;
-                    };
-                } else LOGE("Superpowered client socket handshake error.");
-            };
-            close(sck);
-            usleep(100000);
-        };
+    // Allocating audio buffers for input and output.
+    for (int n = 0; n < NUMOPENSLESBUFFERS; n++) {
+        openSLES.inputBuffers[n] = (short int *)malloc(((size_t)buffersize + 16) * 4);
+        openSLES.outputBuffers[n] = (short int *)malloc(((size_t)buffersize + 16) * 4);
+        memset(openSLES.inputBuffers[n], 0, (size_t)buffersize * 4);
+        memset(openSLES.outputBuffers[n], 0, (size_t)buffersize * 4);
     };
 
-    free(buf);
+    const SLboolean requireds[2] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
+
+    // Create the OpenSL ES engine.
+    slCreateEngine(&openSLES.engine, 0, NULL, 0, NULL, NULL);
+    (*openSLES.engine)->Realize(openSLES.engine, SL_BOOLEAN_FALSE);
+    SLEngineItf openSLEngineInterface = NULL;
+    (*openSLES.engine)->GetInterface(openSLES.engine, SL_IID_ENGINE, &openSLEngineInterface);
+    // Create the output mix.
+    (*openSLEngineInterface)->CreateOutputMix(openSLEngineInterface, &openSLES.outputMix, 0, NULL, NULL);
+    (*openSLES.outputMix)->Realize(openSLES.outputMix, SL_BOOLEAN_FALSE);
+    SLDataLocator_OutputMix outputMixLocator = { SL_DATALOCATOR_OUTPUTMIX, openSLES.outputMix };
+
+    // Create the output buffer queue.
+    SLDataLocator_AndroidSimpleBufferQueue outputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
+    SLDataFormat_PCM outputFormat = { SL_DATAFORMAT_PCM, 2, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
+    SLDataSource outputSource = { &outputLocator, &outputFormat };
+    const SLInterfaceID outputInterfaces[1] = { SL_IID_BUFFERQUEUE };
+    SLDataSink outputSink = { &outputMixLocator, NULL };
+    (*openSLEngineInterface)->CreateAudioPlayer(openSLEngineInterface, &openSLES.outputBufferQueue, &outputSource, &outputSink, 1, outputInterfaces, requireds);
+    (*openSLES.outputBufferQueue)->Realize(openSLES.outputBufferQueue, SL_BOOLEAN_FALSE);
+
+    // Create the input buffer queue.
+    SLDataLocator_IODevice deviceInputLocator = { SL_DATALOCATOR_IODEVICE, SL_IODEVICE_AUDIOINPUT, SL_DEFAULTDEVICEID_AUDIOINPUT, NULL };
+    SLDataSource inputSource = { &deviceInputLocator, NULL };
+    SLDataLocator_AndroidSimpleBufferQueue inputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
+    SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, 2, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
+    SLDataSink inputSink = { &inputLocator, &inputFormat };
+    const SLInterfaceID inputInterfaces[2] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
+    (*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &openSLES.inputBufferQueue, &inputSource, &inputSink, 2, inputInterfaces, requireds);
+
+    // Configure the voice recognition preset which has no signal processing for lower latency.
+    SLAndroidConfigurationItf inputConfiguration;
+    if ((*openSLES.inputBufferQueue)->GetInterface(openSLES.inputBufferQueue, SL_IID_ANDROIDCONFIGURATION, &inputConfiguration) == SL_RESULT_SUCCESS) {
+        SLuint32 presetValue = SL_ANDROID_RECORDING_PRESET_VOICE_RECOGNITION;
+        (*inputConfiguration)->SetConfiguration(inputConfiguration, SL_ANDROID_KEY_RECORDING_PRESET, &presetValue, sizeof(SLuint32));
+    };
+    (*openSLES.inputBufferQueue)->Realize(openSLES.inputBufferQueue, SL_BOOLEAN_FALSE);
+
+    // Initialize and start the output buffer queue.
+    (*openSLES.outputBufferQueue)->GetInterface(openSLES.outputBufferQueue, SL_IID_BUFFERQUEUE, &openSLES.outputBufferQueueInterface);
+    (*openSLES.outputBufferQueueInterface)->RegisterCallback(openSLES.outputBufferQueueInterface, openSLESOutputCallback, NULL);
+    (*openSLES.outputBufferQueueInterface)->Enqueue(openSLES.outputBufferQueueInterface, openSLES.outputBuffers[0], (SLuint32)buffersize * 4);
+    SLPlayItf outputPlayInterface;
+    (*openSLES.outputBufferQueue)->GetInterface(openSLES.outputBufferQueue, SL_IID_PLAY, &outputPlayInterface);
+    (*outputPlayInterface)->SetPlayState(outputPlayInterface, SL_PLAYSTATE_PLAYING);
+
+    // Initialize and start the input buffer queue.
+    (*openSLES.inputBufferQueue)->GetInterface(openSLES.inputBufferQueue, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &openSLES.inputBufferQueueInterface);
+    (*openSLES.inputBufferQueueInterface)->RegisterCallback(openSLES.inputBufferQueueInterface, openSLESInputCallback, NULL);
+    SLRecordItf recordInterface;
+    (*openSLES.inputBufferQueue)->GetInterface(openSLES.inputBufferQueue, SL_IID_RECORD, &recordInterface);
+    (*openSLES.inputBufferQueueInterface)->Enqueue(openSLES.inputBufferQueueInterface, openSLES.inputBuffers[0], (SLuint32)buffersize * 4);
+    (*recordInterface)->SetRecordState(recordInterface, SL_RECORDSTATE_RECORDING);
+}
+
+static void stopOpenSLES() {
+    SLRecordItf recordInterface;
+    (*openSLES.inputBufferQueue)->GetInterface(openSLES.inputBufferQueue, SL_IID_RECORD, &recordInterface);
+    (*recordInterface)->SetRecordState(recordInterface, SL_RECORDSTATE_STOPPED);
+
+    SLPlayItf outputPlayInterface;
+    (*openSLES.outputBufferQueue)->GetInterface(openSLES.outputBufferQueue, SL_IID_PLAY, &outputPlayInterface);
+    (*outputPlayInterface)->SetPlayState(outputPlayInterface, SL_PLAYSTATE_STOPPED);
+
+    usleep(200000);
+
+    (*openSLES.outputBufferQueue)->Destroy(openSLES.outputBufferQueue);
+    (*openSLES.inputBufferQueue)->Destroy(openSLES.inputBufferQueue);
+    (*openSLES.outputMix)->Destroy(openSLES.outputMix);
+    (*openSLES.engine)->Destroy(openSLES.engine);
+
+    for (int n = 0; n < NUMOPENSLESBUFFERS; n++) {
+        free(openSLES.inputBuffers[n]);
+        free(openSLES.outputBuffers[n]);
+    }
+}
+
+#if HAS_AAUDIO == 1
+// ------
+// AAudio
+// ------
+
+static struct {
+    AAudioStream *outputStream;
+    AAudioStream *inputStream;
+    bool firstAAudioInput, restarting;
+} aaudio;
+
+aaudio_data_callback_result_t aaudioProcessingCallback(__unused AAudioStream *stream, __unused void *userData, void *audioData, int32_t numFrames) {
+    // Drain excess samples in input the first time.
+    if (aaudio.firstAAudioInput) {
+        aaudio.firstAAudioInput = false;
+        aaudio_result_t drainedFrames = 0;
+        do {
+            drainedFrames = AAudioStream_read(aaudio.inputStream, audioData, numFrames, 0);
+        } while (drainedFrames > 0);
+    }
+
+    if (numFrames > buffersize) buffersize = numFrames;
+
+    aaudio_result_t frameCount = AAudioStream_read(aaudio.inputStream, audioData, numFrames, 0); // Read input.
+
+    if (frameCount > 0) { // Has input.
+        short int *audio = (short int *)audioData;
+
+        measurer->processInput(audio, samplerate, frameCount);
+        measurer->processOutput(audio);
+
+        // If the input frames are less than the output frames. Should not happen.
+        if (frameCount < numFrames) memset(audio + frameCount * 2, 0, size_t(numFrames - frameCount) * 4);
+    } else memset(audioData, 0, (size_t)numFrames * 4); // No input, return with silence.
+
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+}
+
+static void *restartAAudioThread(__unused void *param);
+
+static void AAudioErrorCallback(AAudioStream *stream, __unused void *userData, aaudio_result_t error) {
+    LOGI("%s aaudio stream error: %s", (AAudioStream_getDirection(stream) == AAUDIO_DIRECTION_OUTPUT) ? "output" : "input", AAudio_convertResultToText(error));
+
+    if (AAudioStream_getState(stream) == AAUDIO_STREAM_STATE_DISCONNECTED) { // If the audio routing has been changed, restart audio I/O.
+        if (aaudio.restarting) LOGI("Restarting already.");
+        else {
+            aaudio.restarting = true;
+            pthread_t thread;
+            pthread_create(&thread, NULL, restartAAudioThread, NULL);
+        }
+    }
+}
+
+static bool startAAudio() {
+    hasAAudio = false;
+    aaudio.firstAAudioInput = true;
+    aaudio.inputStream = NULL;
+    aaudio.outputStream = NULL;
+
+    // Setup output.
+    AAudioStreamBuilder *outputStreamBuilder;
+    if (AAudio_createStreamBuilder(&outputStreamBuilder) != AAUDIO_OK) return false;
+
+    AAudioStreamBuilder_setDirection(outputStreamBuilder, AAUDIO_DIRECTION_OUTPUT);
+    AAudioStreamBuilder_setFormat(outputStreamBuilder, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setChannelCount(outputStreamBuilder, 2);
+    AAudioStreamBuilder_setSharingMode(outputStreamBuilder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+    AAudioStreamBuilder_setPerformanceMode(outputStreamBuilder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setErrorCallback(outputStreamBuilder, AAudioErrorCallback, NULL);
+    AAudioStreamBuilder_setDataCallback(outputStreamBuilder, aaudioProcessingCallback, NULL);
+
+    if ((AAudioStreamBuilder_openStream(outputStreamBuilder, &aaudio.outputStream) == AAUDIO_OK) && (aaudio.outputStream != NULL)) {
+        samplerate = AAudioStream_getSampleRate(aaudio.outputStream);
+        AAudioStream_setBufferSizeInFrames(aaudio.outputStream, AAudioStream_getFramesPerBurst(aaudio.outputStream));
+        buffersize = AAudioStream_getBufferSizeInFrames(aaudio.outputStream);
+    } else {
+        AAudioStreamBuilder_delete(outputStreamBuilder);
+        return false;
+    }
+
+    // Setup input.
+    AAudioStreamBuilder *inputStreamBuilder;
+    if (AAudio_createStreamBuilder(&inputStreamBuilder) != AAUDIO_OK) {
+        AAudioStreamBuilder_delete(outputStreamBuilder);
+        AAudioStream_close(aaudio.outputStream);
+        return false;
+    }
+
+    AAudioStreamBuilder_setDirection(inputStreamBuilder, AAUDIO_DIRECTION_INPUT);
+    AAudioStreamBuilder_setFormat(inputStreamBuilder, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setChannelCount(inputStreamBuilder, 2);
+    AAudioStreamBuilder_setSharingMode(inputStreamBuilder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+    AAudioStreamBuilder_setPerformanceMode(inputStreamBuilder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setErrorCallback(inputStreamBuilder, AAudioErrorCallback, NULL);
+    AAudioStreamBuilder_setSampleRate(inputStreamBuilder, samplerate);
+
+    if (!((AAudioStreamBuilder_openStream(inputStreamBuilder, &aaudio.inputStream) == AAUDIO_OK) && (aaudio.inputStream != NULL))) {
+        AAudioStreamBuilder_delete(inputStreamBuilder);
+        AAudioStreamBuilder_delete(outputStreamBuilder);
+        AAudioStream_close(aaudio.outputStream);
+        return false;
+    }
+
+    AAudioStreamBuilder_delete(inputStreamBuilder);
+    AAudioStreamBuilder_delete(outputStreamBuilder);
+
+    // Start audio I/O.
+    bool success = (AAudioStream_requestStart(aaudio.outputStream) == AAUDIO_OK) && (AAudioStream_requestStart(aaudio.inputStream) == AAUDIO_OK);
+    if (!success) {
+        AAudioStream_close(aaudio.outputStream);
+        AAudioStream_close(aaudio.inputStream);
+    } else hasAAudio = true;
+
+    aaudio.restarting = false;
+    return success;
+}
+
+static void stopAAudio() {
+    AAudioStream_requestStop(aaudio.outputStream);
+    AAudioStream_requestStop(aaudio.inputStream);
+    AAudioStream_close(aaudio.outputStream);
+    AAudioStream_close(aaudio.inputStream);
+}
+
+// This is started by the error callback.
+static void *restartAAudioThread(__unused void *param) {
+    LOGI("Restarting AAudio.");
+    stopAAudio();
+    usleep(200000);
+    startAAudio();
     pthread_detach(pthread_self());
     pthread_exit(NULL);
     return NULL;
 }
 
-// Audio input comes here.
-static void inputCallback(SLAndroidSimpleBufferQueueItf caller, void *pContext) {
-    if (superpoweredIO) {
-        (*caller)->Enqueue(caller, inputBuffers[0], buffersize * 4);
-        return;
-    }
-
-    pthread_mutex_lock(&mutex);
-    short int *inputBuffer = inputBuffers[inputBufferWrite];
-    if (inputBuffersAvailable == 0) inputBufferRead = inputBufferWrite;
-    inputBuffersAvailable++;
-    if (inputBufferWrite < numBuffers - 1) inputBufferWrite++; else inputBufferWrite = 0;
-    pthread_mutex_unlock(&mutex);
-
-    measurer->processInput(inputBuffer, samplerate, buffersize);
-    (*caller)->Enqueue(caller, inputBuffer, buffersize * 4);
-}
-
-// Audio output must be provided here.
-static void outputCallback(SLAndroidSimpleBufferQueueItf caller, void *pContext) {
-    if (superpoweredIO) {
-        (*caller)->Enqueue(caller, outputBuffers[0], buffersize * 4);
-        return;
-    }
-    if (!superpoweredThreadLaunched) {
-        superpoweredThreadLaunched = true;
-        pthread_t thread;
-        pthread_create(&thread, NULL, socketThread, NULL);
-    };
-
-	short int *outputBuffer = outputBuffers[outputBufferIndex];
-    pthread_mutex_lock(&mutex);
-
-    if (inputBuffersAvailable < 1) {
-    	pthread_mutex_unlock(&mutex);
-  		memset(outputBuffer, 0, buffersize * 4);
-   	} else {
-    	short int *inputBuffer = inputBuffers[inputBufferRead];
-    	if (inputBufferRead < numBuffers - 1) inputBufferRead++; else inputBufferRead = 0;
-    	inputBuffersAvailable--;
-    	pthread_mutex_unlock(&mutex);
-
-        measurer->processOutput(outputBuffer);
-        if (measurer->state == -1) memcpy(outputBuffer, inputBuffer, buffersize * 4);
-   	};
-
-   	if (outputBufferIndex < numBuffers - 1) outputBufferIndex++; else outputBufferIndex = 0;
-    (*caller)->Enqueue(caller, outputBuffer, buffersize * 4);
-}
+#endif
 
 // Ugly Java-native bridges - JNI, that is.
 extern "C" {
-    JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(JNIEnv *javaEnvironment, jobject self, jlong _samplerate, jlong _buffersize);
-    JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_toggleMeasurer(JNIEnv *javaEnvironment, jobject self);
+    JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(JNIEnv *javaEnvironment, jobject self, jlong samplerateFromJava, jlong buffersizeFromJava);
+    JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_toggleMeasurer(JNIEnv *javaEnvironment, jobject self, jboolean useAAudioIfAvailable);
     JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_togglePassThrough(JNIEnv *javaEnvironment, jobject self);
     JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getState(JNIEnv *javaEnvironment, jobject self);
     JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(JNIEnv *javaEnvironment, jobject self);
     JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(JNIEnv *javaEnvironment, jobject self);
     JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(JNIEnv *javaEnvironment, jobject self);
-    JNIEXPORT jboolean Java_com_superpowered_superpoweredlatency_MainActivity_getSuperpowered(JNIEnv *javaEnvironment, jobject self);
+    JNIEXPORT jboolean Java_com_superpowered_superpoweredlatency_MainActivity_getAAudio(JNIEnv *javaEnvironment, jobject self);
 }
 
-JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_toggleMeasurer(JNIEnv *javaEnvironment, jobject self) { measurer->toggle(); }
-JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_togglePassThrough(JNIEnv *javaEnvironment, jobject self) { measurer->togglePassThrough(); }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getState(JNIEnv *javaEnvironment, jobject self) { return measurer->state; }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(JNIEnv *javaEnvironment, jobject self) { return measurer->latencyMs; }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(JNIEnv *javaEnvironment, jobject self) { return measurer->samplerate; }
-JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(JNIEnv *javaEnvironment, jobject self) { return measurer->buffersize; }
-JNIEXPORT jboolean Java_com_superpowered_superpoweredlatency_MainActivity_getSuperpowered(JNIEnv *javaEnvironment, jobject self) { return superpoweredIO; }
+JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_toggleMeasurer(__unused JNIEnv *javaEnvironment, __unused jobject self, jboolean useAAudioIfAvailable) {
+    measurer->toggle();
+    isRunning = !isRunning;
+#if HAS_AAUDIO == 1
+    if (isRunning) {
+        if (useAAudioIfAvailable) {
+            if (!startAAudio()) startOpenSLES(); // Use OpenSL ES if AAudio is not available.
+        } else startOpenSLES();
+        LOGI(hasAAudio ? "Using AAudio." : "Using OpenSL ES.");
+    } else {
+        if (hasAAudio) stopAAudio(); else stopOpenSLES();
+    }
+#else
+    if (isRunning) startOpenSLES(); else stopOpenSLES();
+#endif
+}
+JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_togglePassThrough(__unused JNIEnv *javaEnvironment, __unused jobject self) { measurer->togglePassThrough(); }
+JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getState(__unused JNIEnv *javaEnvironment, __unused jobject self) { return measurer->state; }
+JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getLatencyMs(__unused JNIEnv *javaEnvironment, __unused jobject self) { return measurer->latencyMs; }
+JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getSamplerate(__unused JNIEnv *javaEnvironment, __unused jobject self) { return measurer->samplerate; }
+JNIEXPORT jint Java_com_superpowered_superpoweredlatency_MainActivity_getBuffersize(__unused JNIEnv *javaEnvironment, __unused jobject self) { return measurer->buffersize; }
+JNIEXPORT jboolean Java_com_superpowered_superpoweredlatency_MainActivity_getAAudio(__unused JNIEnv *javaEnvironment, __unused jobject self) { return (jboolean)hasAAudio; }
 
 // Set up audio and measurer.
-JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(JNIEnv *javaEnvironment, jobject self, jlong _samplerate, jlong _buffersize) {
-    static const SLboolean requireds[2] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
-
+JNIEXPORT void Java_com_superpowered_superpoweredlatency_MainActivity_SuperpoweredLatency(__unused JNIEnv *javaEnvironment, __unused jobject self, jlong _samplerateFromJava, jlong _buffersizeFromJava) {
+    openSLES.samplerateFromJava = (int)_samplerateFromJava;
+    openSLES.buffersizeFromJava = (int)_buffersizeFromJava;
     measurer = new latencyMeasurer();
-    pthread_mutex_init(&mutex, NULL);
-    samplerate = _samplerate;
-    // If buffersize is negative, then we have Android 4.4 or higher.
-    if (_buffersize < 0) {
-        buffersize = -_buffersize;
-        numBuffers = 1;
-    } else {
-        buffersize = _buffersize;
-        numBuffers = 2;
-    };
-
-    // Allocating audio buffers for input and output.
-    for (int n = 0; n < numBuffers; n++) {
-        inputBuffers[n] = (short int *)malloc((buffersize + 16) * 4);
-        outputBuffers[n] = (short int *)malloc((buffersize + 16) * 4);
-        memset(inputBuffers[n], 0, buffersize * 4);
-        memset(outputBuffers[n], 0, buffersize * 4);
-    };
-
-    // Create the OpenSL ES engine.
-	slCreateEngine(&openSLEngine, 0, NULL, 0, NULL, NULL);
-	(*openSLEngine)->Realize(openSLEngine, SL_BOOLEAN_FALSE);
-	SLEngineItf openSLEngineInterface = NULL;
-	(*openSLEngine)->GetInterface(openSLEngine, SL_IID_ENGINE, &openSLEngineInterface);
-	// Create the output mix.
-	(*openSLEngineInterface)->CreateOutputMix(openSLEngineInterface, &outputMix, 0, NULL, NULL);
-	(*outputMix)->Realize(outputMix, SL_BOOLEAN_FALSE);
-	SLDataLocator_OutputMix outputMixLocator = { SL_DATALOCATOR_OUTPUTMIX, outputMix };
-
-	// Create the input buffer queue.
-	SLDataLocator_IODevice deviceInputLocator = { SL_DATALOCATOR_IODEVICE, SL_IODEVICE_AUDIOINPUT, SL_DEFAULTDEVICEID_AUDIOINPUT, NULL };
-	SLDataSource inputSource = { &deviceInputLocator, NULL };
-	SLDataLocator_AndroidSimpleBufferQueue inputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
-	SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, 2, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
-	SLDataSink inputSink = { &inputLocator, &inputFormat };
-	const SLInterfaceID inputInterfaces[2] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
-	(*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &inputBufferQueue, &inputSource, &inputSink, 2, inputInterfaces, requireds);
-
-    // Configure the voice recognition preset which has no signal processing for lower latency.
-    SLAndroidConfigurationItf inputConfiguration;
-    if ((*inputBufferQueue)->GetInterface(inputBufferQueue, SL_IID_ANDROIDCONFIGURATION, &inputConfiguration) == SL_RESULT_SUCCESS) {
-        SLuint32 presetValue = SL_ANDROID_RECORDING_PRESET_VOICE_RECOGNITION;
-        (*inputConfiguration)->SetConfiguration(inputConfiguration, SL_ANDROID_KEY_RECORDING_PRESET, &presetValue, sizeof(SLuint32));
-    };
-    (*inputBufferQueue)->Realize(inputBufferQueue, SL_BOOLEAN_FALSE);
-
-	// Create the output buffer queue.
-	SLDataLocator_AndroidSimpleBufferQueue outputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
-	SLDataFormat_PCM outputFormat = { SL_DATAFORMAT_PCM, 2, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN };
-	SLDataSource outputSource = { &outputLocator, &outputFormat };
-    const SLInterfaceID outputInterfaces[1] = { SL_IID_BUFFERQUEUE };
-    SLDataSink outputSink = { &outputMixLocator, NULL };
-    (*openSLEngineInterface)->CreateAudioPlayer(openSLEngineInterface, &outputBufferQueue, &outputSource, &outputSink, 1, outputInterfaces, requireds);
-    (*outputBufferQueue)->Realize(outputBufferQueue, SL_BOOLEAN_FALSE);
-
-    // Initialize and start the input buffer queue.
-    (*inputBufferQueue)->GetInterface(inputBufferQueue, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &inputBufferQueueInterface);
-    (*inputBufferQueueInterface)->RegisterCallback(inputBufferQueueInterface, inputCallback, NULL);
-    SLRecordItf recordInterface;
-    (*inputBufferQueue)->GetInterface(inputBufferQueue, SL_IID_RECORD, &recordInterface);
-    (*inputBufferQueueInterface)->Enqueue(inputBufferQueueInterface, inputBuffers[0], buffersize * 4);
-    (*recordInterface)->SetRecordState(recordInterface, SL_RECORDSTATE_RECORDING);
-
-    // Initialize and start the output buffer queue.
-    (*outputBufferQueue)->GetInterface(outputBufferQueue, SL_IID_BUFFERQUEUE, &outputBufferQueueInterface);
-    (*outputBufferQueueInterface)->RegisterCallback(outputBufferQueueInterface, outputCallback, NULL);
-    (*outputBufferQueueInterface)->Enqueue(outputBufferQueueInterface, outputBuffers[0], buffersize * 4);
-    SLPlayItf outputPlayInterface;
-    (*outputBufferQueue)->GetInterface(outputBufferQueue, SL_IID_PLAY, &outputPlayInterface);
-    (*outputPlayInterface)->SetPlayState(outputPlayInterface, SL_PLAYSTATE_PLAYING);
 }

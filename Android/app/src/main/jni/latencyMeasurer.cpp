@@ -118,10 +118,10 @@ void latencyMeasurer::processInput(short int *audio, int _samplerate, int number
                         state = 10;
                         measurementState = nextMeasurementState = idle;
                     } else if (state == 10) { // Final result.
-                        latencyMs = sum * 0.1f;
+                        latencyMs = int(sum * 0.1f);
                         measurementState = nextMeasurementState = idle;
                     } else { // Next step.
-                        latencyMs = roundTripLatencyMs[state - 1];
+                        latencyMs = (int)roundTripLatencyMs[state - 1];
                         measurementState = nextMeasurementState = waiting;
                     };
 
@@ -157,7 +157,7 @@ void latencyMeasurer::processInput(short int *audio, int _samplerate, int number
 void latencyMeasurer::processOutput(short int *audio) {
     if (measurementState == passthrough) return;
 
-    if (rampdec < 0.0f) memset(audio, 0, buffersize * 4); // Output silence.
+    if (rampdec < 0.0f) memset(audio, 0, (size_t)buffersize * 4); // Output silence.
     else { // Output sine wave.
         float ramp = 1.0f, mul = (2.0f * float(M_PI) * 1000.0f) / float(samplerate); // 1000 Hz
         int n = buffersize;
