@@ -8,6 +8,6 @@
     <CheckBoxPreference
         android:key="aaudio"
         android:title="Use AAudio if available"
-        android:summary="Will not submit the result to Superpowered."
+        android:summary=""
         android:defaultValue="false" />
 </PreferenceScreen>

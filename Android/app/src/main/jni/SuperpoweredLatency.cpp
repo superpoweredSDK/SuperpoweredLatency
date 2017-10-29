@@ -178,7 +178,6 @@ aaudio_data_callback_result_t aaudioProcessingCallback(__unused AAudioStream *st
 
     if (frameCount > 0) { // Has input.
         short int *audio = (short int *)audioData;
-
         measurer->processInput(audio, samplerate, frameCount);
         measurer->processOutput(audio);
 

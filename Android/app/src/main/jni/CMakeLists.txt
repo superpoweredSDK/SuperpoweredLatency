@@ -40,4 +40,3 @@ target_link_libraries(
     OpenSLES
     aaudio
 )
-

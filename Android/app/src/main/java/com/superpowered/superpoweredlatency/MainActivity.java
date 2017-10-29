@@ -194,10 +194,7 @@ public class MainActivity extends AppCompatActivity {
                     ((TextView)findViewById(R.id.api)).setText(aaudio ? "AAudio" : "OpenSL ES");
                     button.setText("Share Results");
 
-                    if (
-                            !PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("aaudio", false) &&
-                            PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)
-                            ) {
+                    if (PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)) {
                         // Uploading the result to our server. Results with native buffer sizes are reported only.
                         network.setText("Uploading data...");
                         String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=0&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0) + "&aaudio=" + (aaudio ? 1 : 0))
@@ -298,6 +295,8 @@ public class MainActivity extends AppCompatActivity {
                 HttpURLConnection connection = (HttpURLConnection)url.openConnection();
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Cache-Control", "no-cache");
+                connection.setConnectTimeout(30000);
+                connection.setReadTimeout(60000);
                 try {
                     InputStream in = connection.getInputStream();
                     InputStreamReader reader = new InputStreamReader(in);
@@ -311,6 +310,7 @@ public class MainActivity extends AppCompatActivity {
                     connection.disconnect();
                 }
             } catch (IOException e) {
+                e.printStackTrace();
                 return false;
             }
             return okay;
