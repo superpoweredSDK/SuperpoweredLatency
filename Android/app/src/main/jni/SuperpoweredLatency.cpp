@@ -21,6 +21,7 @@ static bool isRunning = false;
 constexpr int kChannelCountMono = 1;
 constexpr int kChannelCountStereo = 2;
 constexpr int kBytesIn16BitSample = 2;
+constexpr int kBytesPerStereoAudioFrame = kChannelCountStereo * kBytesIn16BitSample;
 
 
 // ---------
@@ -33,6 +34,7 @@ static struct {
     SLAndroidSimpleBufferQueueItf outputBufferQueueInterface, inputBufferQueueInterface;
     short int *inputBuffers[NUMOPENSLESBUFFERS], *outputBuffers[NUMOPENSLESBUFFERS];
     int samplerateFromJava, buffersizeFromJava, inputBufferWriteIndex, inputBufferReadIndex, inputBuffersAvailable, outputBufferWriteIndex;
+    SLuint32 inputChannelCount = kChannelCountStereo;
 } openSLES;
 
 // Note: input array must be at least 2 * numFrames in size
@@ -48,8 +50,10 @@ static void openSLESInputCallback(SLAndroidSimpleBufferQueueItf caller, __unused
     __sync_fetch_and_add(&openSLES.inputBuffersAvailable, 1);
     short int *inputBuffer = openSLES.inputBuffers[openSLES.inputBufferWriteIndex];
     if (openSLES.inputBufferWriteIndex < NUMOPENSLESBUFFERS - 1) openSLES.inputBufferWriteIndex++; else openSLES.inputBufferWriteIndex = 0;
-    (*caller)->Enqueue(caller, inputBuffer, (SLuint32)buffersize * kChannelCountMono * kBytesIn16BitSample);
-    convertBufferToStereo(inputBuffer, (SLuint32)buffersize);
+    (*caller)->Enqueue(caller, inputBuffer, (SLuint32)buffersize * openSLES.inputChannelCount * kBytesIn16BitSample);
+    if (openSLES.inputChannelCount == kChannelCountMono){
+        convertBufferToStereo(inputBuffer, (SLuint32)buffersize);
+    }
 }
 
 // Audio output must be provided here.
@@ -75,17 +79,22 @@ static void startOpenSLES() {
     samplerate = openSLES.samplerateFromJava;
     buffersize = openSLES.buffersizeFromJava;
 
+    // If on Android 8.0 then use a mono input stream
+    if (__ANDROID_API__ == __ANDROID_API_O__) openSLES.inputChannelCount = kChannelCountMono;
+
     openSLES.inputBufferWriteIndex = 1; // Start from 1, because we enqueue one buffer when we start the input buffer queue.
     openSLES.inputBufferReadIndex = 0;
     openSLES.inputBuffersAvailable = 0;
     openSLES.outputBufferWriteIndex = 1; // Start from 1, because we enqueue one buffer when we start the output buffer queue.
 
     // Allocating audio buffers for input and output.
+    // Note that regardless of the input channel count we still allocate enough for stereo audio
+    // frames so we can do the mono->stereo conversion.
     for (int n = 0; n < NUMOPENSLESBUFFERS; n++) {
-        openSLES.inputBuffers[n] = (short int *)malloc(((size_t)buffersize + 16) * kChannelCountStereo * kBytesIn16BitSample);
-        openSLES.outputBuffers[n] = (short int *)malloc(((size_t)buffersize + 16) * kChannelCountStereo * kBytesIn16BitSample);
-        memset(openSLES.inputBuffers[n], 0, (size_t)buffersize * kChannelCountStereo * kBytesIn16BitSample);
-        memset(openSLES.outputBuffers[n], 0, (size_t)buffersize * kChannelCountStereo * kBytesIn16BitSample);
+        openSLES.inputBuffers[n] = (short int *)malloc(((size_t)buffersize + 16) * kBytesPerStereoAudioFrame);
+        openSLES.outputBuffers[n] = (short int *)malloc(((size_t)buffersize + 16) * kBytesPerStereoAudioFrame);
+        memset(openSLES.inputBuffers[n], 0, (size_t)buffersize * kBytesPerStereoAudioFrame);
+        memset(openSLES.outputBuffers[n], 0, (size_t)buffersize * kBytesPerStereoAudioFrame);
     };
 
     const SLboolean requireds[2] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
@@ -113,7 +122,7 @@ static void startOpenSLES() {
     SLDataLocator_IODevice deviceInputLocator = { SL_DATALOCATOR_IODEVICE, SL_IODEVICE_AUDIOINPUT, SL_DEFAULTDEVICEID_AUDIOINPUT, NULL };
     SLDataSource inputSource = { &deviceInputLocator, NULL };
     SLDataLocator_AndroidSimpleBufferQueue inputLocator = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 1 };
-    SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, kChannelCountMono, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_CENTER, SL_BYTEORDER_LITTLEENDIAN };
+    SLDataFormat_PCM inputFormat = { SL_DATAFORMAT_PCM, openSLES.inputChannelCount, (SLuint32)samplerate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16, SL_SPEAKER_FRONT_CENTER, SL_BYTEORDER_LITTLEENDIAN };
     SLDataSink inputSink = { &inputLocator, &inputFormat };
     const SLInterfaceID inputInterfaces[2] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
     (*openSLEngineInterface)->CreateAudioRecorder(openSLEngineInterface, &openSLES.inputBufferQueue, &inputSource, &inputSink, 2, inputInterfaces, requireds);
