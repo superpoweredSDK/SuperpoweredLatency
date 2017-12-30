@@ -133,7 +133,7 @@ static void streamFormatChangedCallback(void *inRefCon, AudioUnit inUnit, AudioU
     [[AVAudioSession sharedInstance] setPreferredSampleRate:48000 error:NULL];
     [[AVAudioSession sharedInstance] setPreferredIOBufferDuration:64.0 / 48000.0 error:NULL];
     [[AVAudioSession sharedInstance] setActive:YES error:NULL];
-    [[AVAudioSession sharedInstance] overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
+    //[[AVAudioSession sharedInstance] overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
 
     // Set up the RemoteIO audio input/output unit.
     AudioComponentDescription desc;
