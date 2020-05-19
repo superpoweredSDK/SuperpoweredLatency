@@ -197,7 +197,7 @@ public class MainActivity extends AppCompatActivity {
                     if (PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getBoolean("submit", true)) {
                         // Uploading the result to our server. Results with native buffer sizes are reported only.
                         network.setText("Uploading data...");
-                        String url = Uri.parse("http://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=0&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0) + "&aaudio=" + (aaudio ? 1 : 0))
+                        String url = Uri.parse("https://superpowered.com/latencydata/input.php?ms=" + _latencyMs + "&samplerate=" + samplerate + "&buffersize=" + buffersize + "&sapa=0&headphone=" + (headphoneSocket ? 1 : 0) + "&proaudio=" + (proAudioFlag ? 1 : 0) + "&aaudio=" + (aaudio ? 1 : 0))
                                 .buildUpon()
                                 .appendQueryParameter("model", encodeString(Build.MANUFACTURER + " " + Build.MODEL))
                                 .appendQueryParameter("os", encodeString(Build.VERSION.RELEASE))

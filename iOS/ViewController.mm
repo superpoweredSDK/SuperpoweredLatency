@@ -60,11 +60,11 @@ static NSString *encodedString(NSString *str) {
                 // Uploading the result to our server.
                 NSString *url = [NSString stringWithFormat:@"http://superpowered.com/latencydata/input.php?ms=%i&samplerate=%i&buffersize=%i&model=%@&os=%@&build=0", measurer->latencyMs, measurer->samplerate, measurer->buffersize, encodedString(model.text), encodedString([[UIDevice currentDevice] systemVersion])];
                 [NSURLConnection sendAsynchronousRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url] cachePolicy:NSURLRequestReloadIgnoringCacheData timeoutInterval:30] queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
-                    if (error) network.text = [error localizedDescription];
+                    if (error) self.network.text = [error localizedDescription];
                     else if ([data length] == 2) {
-                        network.text = @"Thank you. We've uploaded the result to the latency benchmarking at:";
-                        website.hidden = NO;
-                    } else network.text = @"Network error.";
+                        self.network.text = @"Thank you. We've uploaded the result to the latency benchmarking at:";
+                        self.website.hidden = NO;
+                    } else self.network.text = @"Network error.";
                 }];
             };
 
@@ -122,7 +122,14 @@ static void streamFormatChangedCallback(void *inRefCon, AudioUnit inUnit, AudioU
 - (void)viewDidLoad {
     [super viewDidLoad];
     mainTitle.text = [NSString stringWithFormat:@"Superpowered Latency Test v%@", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]];
+    if ([[AVAudioSession sharedInstance] respondsToSelector:@selector(recordPermission)] && [[AVAudioSession sharedInstance] respondsToSelector:@selector(requestRecordPermission:)] && ([[AVAudioSession sharedInstance] recordPermission] != AVAudioSessionRecordPermissionGranted)) {
+        [[AVAudioSession sharedInstance] requestRecordPermission:^(BOOL granted) {
+            if (granted) [self finishLoading];
+        }];
+    } else [self finishLoading];
+}
 
+- (void)finishLoading {
     measurerState = -1000;
     measurer = new latencyMeasurer();
 
@@ -210,7 +217,7 @@ static void streamFormatChangedCallback(void *inRefCon, AudioUnit inUnit, AudioU
         SLComposeViewController *controller = [SLComposeViewController composeViewControllerForServiceType:serviceType];
         if (!controller) return;
 
-        [controller setInitialText:[NSString stringWithFormat:@"I just tested my %@ with the Superpowered Latency Test App: %i ms.", model.text, measurer->latencyMs]];
+        [controller setInitialText:[NSString stringWithFormat:@"I just tested my %@ with the Superpowered Latency Test App: %i ms.", self.model.text, self->measurer->latencyMs]];
         [controller addURL:[NSURL URLWithString:@"http://superpowered.com/latency"]];
         controller.completionHandler = ^(SLComposeViewControllerResult result) {};
 

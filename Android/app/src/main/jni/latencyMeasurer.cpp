@@ -5,7 +5,6 @@
 
 /*
  Cross-platform class measuring round-trip audio latency.
- It runs on both iOS and Android, so the same code performs the measurement on every mobile device.
  How one measurement step works:
 
  - Listen and measure the average loudness of the environment for 1 second.
@@ -14,13 +13,13 @@
  - Stop counting and playing if the input's loudness is higher than the threshold, as the output wave is coming back (probably).
  - Divide the the elapsed samples with the sample rate to get the round-trip audio latency value in seconds.
  - We expect the threshold exceeded within 1 second. If it did not, then fail with error. Usually happens when the environment is too noisy (loud).
- 
+
  How the measurement process works:
- 
+
  - Perform 10 measurement steps.
  - Repeat every step until it returns without an error.
  - Store the results in an array of 10 floats.
- - After each step, check the minimum and maximum values. 
+ - After each step, check the minimum and maximum values.
  - If the maximum is higher than the minimum's double, stop the measurement process with an error. It indicates an unknown error, perhaps an unwanted noise happened. Double jitter (dispersion) is too high, an audio system can not be so bad.
 */
 
