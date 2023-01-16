@@ -59,12 +59,16 @@ static NSString *encodedString(NSString *str) {
 
                 // Uploading the result to our server.
                 NSString *url = [NSString stringWithFormat:@"http://superpowered.com/latencydata/input.php?ms=%i&samplerate=%i&buffersize=%i&model=%@&os=%@&build=0", measurer->latencyMs, measurer->samplerate, measurer->buffersize, encodedString(model.text), encodedString([[UIDevice currentDevice] systemVersion])];
-                [NSURLConnection sendAsynchronousRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url] cachePolicy:NSURLRequestReloadIgnoringCacheData timeoutInterval:30] queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
-                    if (error) self.network.text = [error localizedDescription];
-                    else if ([data length] == 2) {
+                NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:url] cachePolicy:NSURLRequestReloadIgnoringCacheData timeoutInterval:30];
+                [NSURLConnection sendAsynchronousRequest:request queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
+                    if (error) {
+                        self.network.text = [error localizedDescription];
+                    } else if ([data length] == 2) {
                         self.network.text = @"Thank you. We've uploaded the result to the latency benchmarking at:";
                         self.website.hidden = NO;
-                    } else self.network.text = @"Network error.";
+                    } else {
+                        self.network.text = @"Network error.";
+                    }
                 }];
             };
 
@@ -124,7 +128,11 @@ static void streamFormatChangedCallback(void *inRefCon, AudioUnit inUnit, AudioU
     mainTitle.text = [NSString stringWithFormat:@"Superpowered Latency Test v%@", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]];
     if ([[AVAudioSession sharedInstance] respondsToSelector:@selector(recordPermission)] && [[AVAudioSession sharedInstance] respondsToSelector:@selector(requestRecordPermission:)] && ([[AVAudioSession sharedInstance] recordPermission] != AVAudioSessionRecordPermissionGranted)) {
         [[AVAudioSession sharedInstance] requestRecordPermission:^(BOOL granted) {
-            if (granted) [self finishLoading];
+            if (granted) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self finishLoading];
+                });
+            }
         }];
     } else [self finishLoading];
 }
@@ -134,7 +142,7 @@ static void streamFormatChangedCallback(void *inRefCon, AudioUnit inUnit, AudioU
     measurer = new latencyMeasurer();
 
     // Set up the audio session. Prefer 48 kHz and 64 samples.
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord error:NULL];
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker error:NULL];
     // Default mode adds 30 ms of additional latency for the built-in microphone on iOS devices from the first iPad Air.
     [[AVAudioSession sharedInstance] setMode:AVAudioSessionModeMeasurement error:NULL];
     [[AVAudioSession sharedInstance] setPreferredSampleRate:48000 error:NULL];
